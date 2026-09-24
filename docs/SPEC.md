@@ -57,9 +57,10 @@ Buttons are ordinary shapes on slide 1 with PowerPoint's own "Link to: Slide N" 
 2. Each button links to a later slide (Insert > Link > Place in This Document > Slide N). Stored in the XML as a `ppaction://hlinksldjump` click action.
 3. Each destination slide may contain a shape linked back to slide 1, rendered as a "Home" button.
 4. A destination slide may also contain shapes linking onward to a further slide — a "Next", "Back", or similarly named shape — so a deck isn't limited to a flat Home <-> Destination pair. These may be an explicit "Link to: Slide N", or PowerPoint's "Next Slide" / "Previous Slide" / "First Slide" / "Last Slide" actions (resolved relative to the shape's own slide, and clamped to the deck — a "Next Slide" link on the last slide simply has no target). A slide reached only through such a chain is still "linked" for validation purposes, but is still flagged with a warning if it has no way back to slide 1.
-5. A shape that links to its own slide is an authoring mistake, not a nav link: it is flagged as a warning and otherwise ignored, rather than crashing or creating a self-loop.
-6. Slides not reachable from slide 1 (by a home-slide button, optionally followed by a chain of nav links) are ignored (flagged as a warning, not an error).
-7. Two buttons may point to the same slide; they are still logged separately.
+5. A shape with PowerPoint's "Last Slide Viewed" action (Insert > Action > Hyperlink to: Last Slide Viewed, stored as `ppaction://hlinkshowjump?jump=lastslideviewed`) is a "Back" link: it returns to whichever slide the visitor was on before this one, or to Home if they came straight from slide 1. Use it for a shared slide such as Terms and Conditions that several slides link to. A back link counts as a way back for the "no way back to slide 1" warning, but does not make any slide reachable.
+6. A shape that links to its own slide is an authoring mistake, not a nav link: it is flagged as a warning and otherwise ignored, rather than crashing or creating a self-loop.
+7. Slides not reachable from slide 1 (by a home-slide button, optionally followed by a chain of nav links) are ignored (flagged as a warning, not an error).
+8. Two buttons may point to the same slide; they are still logged separately.
 
 **Button naming.** The report uses the shape's name from the Selection Pane (e.g. `BTN_Sustainability`). If unnamed, the app uses the shape's text; if neither exists, "Button 1", "Button 2" in reading order. The admin can rename labels in setup.
 
@@ -136,9 +137,10 @@ stateDiagram-v2
 
 - Full-screen, no browser chrome, no visible UI other than the slide and its buttons.
 - Only detected button areas respond on the home slide; taps elsewhere are logged as "miss" taps but do nothing.
-- On a destination slide, a tap is checked against the Home link first, then any nav links on that slide; a nav link tap logs `slide_nav` and moves to the target slide without leaving destination mode.
+- On a destination slide, a tap is checked against the Home link first, then any back links, then any nav links on that slide; a nav link tap logs `slide_nav` and moves to the target slide without leaving destination mode.
+- A back link tap returns to the previous slide of the current visit (logged as `slide_nav`), or returns Home (logged as `return_home` with method `home_button`) if the visit started on this slide. The history belongs to one visit: it is cleared on every return to Home, including a timeout.
 - The timeout timer starts when a destination slide appears and resets on any tap on that slide, including a nav link tap that moves to a further slide.
-- If a destination slide has no shape linking back to slide 1 (whether it's a direct destination or reached through a chain of nav links) and the Home button return method is enabled, the kiosk shows a discreet fallback Home button so no slide is a dead end.
+- If a destination slide has no shape linking back to slide 1 or back link (whether it's a direct destination or reached through a chain of nav links) and the Home button return method is enabled, the kiosk shows a discreet fallback Home button so no slide is a dead end.
 - Repeat taps within the debounce window are ignored and not logged as presses.
 - Pinch-zoom, text selection, long-press menus, pull-to-refresh and double-tap zoom are disabled.
 - The screen is kept awake with the Screen Wake Lock API; if unavailable, the admin is told to set Auto-Lock to Never.
@@ -162,7 +164,7 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | --- | --- |
 | `kiosk_start` / `kiosk_stop` | Admin starts or exits kiosk mode |
 | `button_press` | A home-slide button is tapped |
-| `slide_nav` | A destination-slide shape links onward to a further slide ("Next"/"Back") is tapped |
+| `slide_nav` | A destination-slide shape that links onward to a further slide ("Next"/"Back"), or a "Last Slide Viewed" back link that returns to a previous slide, is tapped |
 | `return_home` | Destination slide closes; `method` = `home_button`, `tap` or `timeout` |
 | `miss_tap` | Tap on the home slide outside any button |
 | `app_resume` | App relaunches or returns to foreground in kiosk mode |

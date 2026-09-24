@@ -34,6 +34,7 @@ function fakeDeck(): Deck {
     buttons: [],
     homeLinks: [],
   navLinks: [],
+  backLinks: [],
     media: {},
     fonts: [],
   };

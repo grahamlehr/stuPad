@@ -101,9 +101,10 @@ export async function saveDeck(deck: Deck): Promise<void> {
 export async function loadDeck(): Promise<Deck | undefined> {
   const db = await openDatabase();
   const deck = (await db.get(STORE_DECK, SINGLETON_KEY)) as Deck | undefined;
-  // A deck saved before navLinks existed won't have the field; normalise here so every
-  // other module can rely on deck.navLinks always being an array.
+  // A deck saved before navLinks/backLinks existed won't have the fields; normalise here
+  // so every other module can rely on them always being arrays.
   if (deck && !deck.navLinks) deck.navLinks = [];
+  if (deck && !deck.backLinks) deck.backLinks = [];
   return deck;
 }
 

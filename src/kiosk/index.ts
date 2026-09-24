@@ -190,6 +190,9 @@ const CORNER_FRACTION = 0.12;
 const FALLBACK_HOME_SIZE = 88; // slide px, >= 44pt per SPEC accessibility target
 const FALLBACK_HOME_MARGIN = 24;
 const PRESS_FEEDBACK_MS = 220;
+/** Cap on the per-visit slide history used by "Last Slide Viewed" links, so a visitor
+ * looping between two slides with explicit links can't grow it without bound. */
+const MAX_VISIT_PATH = 100;
 const IDLE_WARNING_MS = 5000;
 
 export class KioskController {
@@ -213,6 +216,9 @@ export class KioskController {
    * for slide_nav's dwell_ms; distinct from visitStartedAt, which anchors the whole
    * visit's dwell (used by return_home). */
   private slideEnteredAt = 0;
+  /** Destination slides shown during the current visit, oldest first; the last entry is
+   * destSlide. A "Last Slide Viewed" (back) link pops it. Empty while on the home slide. */
+  private visitPath: number[] = [];
 
   private lastAcceptedTapAt = -Infinity;
 
@@ -261,6 +267,7 @@ export class KioskController {
   async start(): Promise<void> {
     this.mode = 'home';
     this.destSlide = null;
+    this.visitPath = [];
     this.stage = new SlideStage(this.root, this.deck, { useRaster: this.config.useRaster });
     await this.stage.show(1, { type: 'none', ms: 0 });
     this.bindInput();
@@ -376,6 +383,7 @@ export class KioskController {
 
     this.mode = 'destination';
     this.destSlide = button.targetSlide;
+    this.visitPath = [button.targetSlide];
     void this.stage?.show(button.targetSlide, { type: this.config.transition, ms: this.config.transitionMs });
     this.setupFallbackHomeButton();
     this.startDestinationTimer();
@@ -392,6 +400,11 @@ export class KioskController {
     }
     if (this.fallbackHomeBounds && pointInRect(px, py, this.fallbackHomeBounds)) {
       this.returnHome('home_button', now);
+      return;
+    }
+    const backLink = (this.deck.backLinks ?? []).find((b) => b.slide === slide && pointInRect(px, py, b.bounds));
+    if (backLink) {
+      this.goBack(now);
       return;
     }
     const navLink = (this.deck.navLinks ?? []).find((n) => n.slide === slide && pointInRect(px, py, n.bounds));
@@ -417,6 +430,28 @@ export class KioskController {
       this.returnHome('home_button', now);
       return;
     }
+    if (this.destSlide === null) return;
+    this.visitPath.push(navLink.targetSlide);
+    if (this.visitPath.length > MAX_VISIT_PATH) this.visitPath.shift();
+    this.moveToDestination(navLink.targetSlide, now);
+  }
+
+  /** A tap on a "Last Slide Viewed" shape: back to the previous slide of this visit, or
+   * Home if the visitor came straight from slide 1. Logged as `slide_nav` like any other
+   * move between destination slides, so reports still see the visit's path. */
+  private goBack(now: number): void {
+    if (this.destSlide === null) return;
+    if (this.visitPath.length < 2) {
+      this.returnHome('home_button', now);
+      return;
+    }
+    this.visitPath.pop();
+    this.moveToDestination(this.visitPath[this.visitPath.length - 1], now);
+  }
+
+  /** Shared by navigateTo and goBack: log `slide_nav`, show `target` and reset the
+   * fallback Home button and timeout for it. */
+  private moveToDestination(target: number, now: number): void {
     const fromSlide = this.destSlide;
     if (fromSlide === null) return;
     const dwellMs = Math.max(0, Math.round(now - this.slideEnteredAt));
@@ -427,13 +462,13 @@ export class KioskController {
       button_id: this.visitButtonId,
       button_label: this.visitButtonLabel,
       slide_from: fromSlide,
-      slide_to: navLink.targetSlide,
+      slide_to: target,
       dwell_ms: dwellMs,
     });
 
-    this.destSlide = navLink.targetSlide;
+    this.destSlide = target;
     this.slideEnteredAt = now;
-    void this.stage?.show(navLink.targetSlide, { type: this.config.transition, ms: this.config.transitionMs });
+    void this.stage?.show(target, { type: this.config.transition, ms: this.config.transitionMs });
     this.setupFallbackHomeButton();
     this.startDestinationTimer();
   }
@@ -456,6 +491,7 @@ export class KioskController {
 
     this.mode = 'home';
     this.destSlide = null;
+    this.visitPath = [];
     this.visitId = undefined;
     this.visitButtonId = undefined;
     this.visitButtonLabel = undefined;
@@ -555,7 +591,9 @@ export class KioskController {
     const slide = this.destSlide;
     if (!overlay || slide === null) return;
 
-    const hasHomeLink = this.deck.homeLinks.some((h) => h.slide === slide);
+    // A back link always leads somewhere (previous slide or Home), so it isn't a dead end either.
+    const hasHomeLink = this.deck.homeLinks.some((h) => h.slide === slide)
+      || (this.deck.backLinks ?? []).some((b) => b.slide === slide);
     if (hasHomeLink || !this.config.returnMethods.homeButton) return;
 
     // Bottom-center placement: never within a corner region regardless of

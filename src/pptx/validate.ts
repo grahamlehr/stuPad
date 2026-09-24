@@ -70,7 +70,10 @@ export function validateDeck(deck: Deck): Issue[] {
     }
   }
 
-  const homeLinkSlides = new Set(deck.homeLinks.map((h) => h.slide));
+  // A "Last Slide Viewed" link always leads somewhere (the previous slide, or Home when
+  // there is none), so it counts as a way back for no_home_link. It never makes a slide
+  // reachable: its target is only known at run time.
+  const homeLinkSlides = new Set([...deck.homeLinks, ...(deck.backLinks ?? [])].map((h) => h.slide));
   const reachable = reachableSlides(deck);
 
   for (const slide of reachable) {

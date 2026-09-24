@@ -85,8 +85,14 @@ export interface TextBody {
 
 /** A PowerPoint click action. Only slide jumps matter to us. */
 export interface SlideLink {
-  /** 1-based target slide index */
+  /** 1-based target slide index; 0 when `back` is set (the target is only known at run time) */
   targetSlide: number;
+  /**
+   * PowerPoint's "Last Slide Viewed" action (`ppaction://hlinkshowjump?jump=lastslideviewed`):
+   * go back to whichever slide the visitor came from. Becomes a BackLinkDef, never a
+   * button, Home link or nav link.
+   */
+  back?: boolean;
 }
 
 interface ElementBase {
@@ -100,7 +106,8 @@ interface ElementBase {
    * "Link to: Slide N") or `ppaction://hlinkshowjump?jump=...` (firstslide/lastslide/
    * nextslide/previousslide, resolved relative to the shape's own slide and clamped to
    * the deck — see `resolveLink` in src/pptx/shapes.ts). Both forms end up as a plain
-   * 1-based target slide index; callers don't need to distinguish them.
+   * 1-based target slide index; callers don't need to distinguish them. The one
+   * exception is `jump=lastslideviewed`, which sets `back` instead (see SlideLink).
    */
   link?: SlideLink;
   hidden?: boolean;
@@ -202,6 +209,21 @@ export interface NavLinkDef {
   bounds: Rect;
 }
 
+/**
+ * A shape on a non-home slide with PowerPoint's "Last Slide Viewed" action: the kiosk
+ * returns to the slide the visitor was on before this one (or to Home if they came
+ * straight from slide 1).
+ */
+export interface BackLinkDef {
+  slide: number;
+  id: string;
+  /** Selection Pane name, e.g. BTN_Back */
+  shapeName: string;
+  /** default label per the same rule as ButtonDef.defaultLabel */
+  label: string;
+  bounds: Rect;
+}
+
 export interface Deck {
   /** uuid assigned at parse time */
   id: string;
@@ -221,6 +243,11 @@ export interface Deck {
    * missing value as `[]` (`deck.navLinks ?? []`) rather than assuming it's present.
    */
   navLinks: NavLinkDef[];
+  /**
+   * "Last Slide Viewed" shapes on non-home slides. Like navLinks, decks stored before this
+   * field existed won't have it; the store normalises a missing value to `[]`.
+   */
+  backLinks: BackLinkDef[];
   /** mediaKey -> media (images, rasters). Keys are zip paths like "ppt/media/image1.png" or "raster/3.png" */
   media: Record<string, MediaItem>;
   /** font families used in the deck */

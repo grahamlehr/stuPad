@@ -77,6 +77,7 @@ function fakeDeck(): Deck {
     ],
     homeLinks: [{ slide: 2, id: 'h1', bounds: { x: 300, y: 300, w: 100, h: 60 } }],
     navLinks: [],
+    backLinks: [],
     media: {},
     fonts: [],
   };
@@ -415,6 +416,119 @@ describe('KioskController: nav links (multi-slide chains)', () => {
     // Tapping the fallback returns home; nothing left behind in the overlay afterwards.
     vi.advanceTimersByTime(150);
     tap(root, FALLBACK_HOME_POINT.x, FALLBACK_HOME_POINT.y);
+    expect(lastStage!.overlay.querySelectorAll('.kiosk-fallback-home').length).toBe(0);
+  });
+});
+
+describe('KioskController: "Last Slide Viewed" back links', () => {
+  let root: HTMLElement;
+  let logs: Omit<LogEvent, 'ts' | 'session_id'>[];
+  let controller: InstanceType<typeof KioskController>;
+
+  // b1 -> slide 2, b2 -> slide 4 (Terms) directly. Slide 2: "Next" -> 3 and "Terms" -> 4.
+  // Slide 3: "Terms" -> 4. Slide 4 (Terms) has only a back link, no home link.
+  const BUTTON_2 = { x: 650, y: 130 };
+  const NEXT = { x: 550, y: 520 };
+  const TERMS = { x: 850, y: 520 };
+  const BACK = { x: 550, y: 720 };
+
+  function fakeTermsDeck(): Deck {
+    const deck = fakeDeck();
+    deck.buttons.push({
+      id: 'b2', shapeName: 'BTN_Terms', text: 'Terms', defaultLabel: 'Terms', targetSlide: 4,
+      bounds: { x: 600, y: 100, w: 200, h: 100 },
+    });
+    deck.navLinks = [
+      { slide: 2, id: 'n1', shapeName: 'BTN_Next', label: 'Next', targetSlide: 3, bounds: { x: 500, y: 500, w: 200, h: 100 } },
+      { slide: 2, id: 'n2', shapeName: 'BTN_Terms', label: 'Terms', targetSlide: 4, bounds: { x: 800, y: 500, w: 200, h: 100 } },
+      { slide: 3, id: 'n3', shapeName: 'BTN_Terms', label: 'Terms', targetSlide: 4, bounds: { x: 800, y: 500, w: 200, h: 100 } },
+    ];
+    deck.backLinks = [{ slide: 4, id: 'k1', shapeName: 'BTN_Back', label: 'Back', bounds: { x: 500, y: 700, w: 200, h: 100 } }];
+    return deck;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    logs = [];
+  });
+
+  afterEach(() => {
+    controller?.stop();
+    root.remove();
+    vi.useRealTimers();
+  });
+
+  async function makeTermsController(cfgOver: Partial<KioskConfig> = {}) {
+    controller = new KioskController({
+      root,
+      deck: fakeTermsDeck(),
+      config: fakeConfig(cfgOver),
+      sessionId: 'sess-1',
+      log: (e) => logs.push(e),
+      onAdminRequested: vi.fn<() => void>(),
+    });
+    await controller.start();
+    return controller;
+  }
+
+  function tapAfterDebounce(p: { x: number; y: number }): void {
+    vi.advanceTimersByTime(150);
+    tap(root, p.x, p.y);
+  }
+
+  it('returns to the slide the visitor came from, logged as slide_nav', async () => {
+    await makeTermsController();
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> 2
+    tapAfterDebounce(TERMS); // -> 4
+    logs.length = 0;
+
+    tapAfterDebounce(BACK);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ event: 'slide_nav', button_id: 'b1', slide_from: 4, slide_to: 2 });
+    expect(lastStage!.showCalls.at(-1)?.index).toBe(2);
+  });
+
+  it('goes back to whichever slide linked to it, not a fixed one', async () => {
+    await makeTermsController();
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> 2
+    tapAfterDebounce(NEXT); // -> 3
+    tapAfterDebounce(TERMS); // -> 4
+    logs.length = 0;
+
+    tapAfterDebounce(BACK);
+    expect(logs[0]).toMatchObject({ event: 'slide_nav', slide_from: 4, slide_to: 3 });
+    expect(lastStage!.showCalls.at(-1)?.index).toBe(3);
+  });
+
+  it('returns Home when the slide was reached straight from a home-slide button', async () => {
+    await makeTermsController();
+    tap(root, BUTTON_2.x, BUTTON_2.y); // -> 4 directly
+    logs.length = 0;
+
+    tapAfterDebounce(BACK);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ event: 'return_home', method: 'home_button', button_id: 'b2', slide_from: 4, slide_to: 1 });
+    expect(lastStage!.showCalls.at(-1)?.index).toBe(1);
+  });
+
+  it('starts each visit with fresh history, so a timeout does not leak the previous path', async () => {
+    await makeTermsController({ timeoutSec: 5, returnMethods: { homeButton: true, tapAnywhere: false, timeout: true } });
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> 2
+    tapAfterDebounce(TERMS); // -> 4
+    vi.advanceTimersByTime(6000); // timeout -> home
+    expect(logs.at(-1)).toMatchObject({ event: 'return_home', method: 'timeout' });
+
+    tap(root, BUTTON_2.x, BUTTON_2.y); // new visit, -> 4 directly
+    logs.length = 0;
+    tapAfterDebounce(BACK);
+    expect(logs[0]).toMatchObject({ event: 'return_home', slide_from: 4 });
+  });
+
+  it('does not draw the fallback Home button on a slide that has a back link', async () => {
+    await makeTermsController();
+    tap(root, BUTTON_2.x, BUTTON_2.y); // -> 4
     expect(lastStage!.overlay.querySelectorAll('.kiosk-fallback-home').length).toBe(0);
   });
 });
