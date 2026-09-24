@@ -95,8 +95,8 @@ export class SetupScreen {
     clear(this.root);
     this.root.append(
       h('header', { class: 'setup-header' }, [
-        h('h1', {}, ['stuPad setup']),
-        h('p', { class: 'setup-sub' }, ['Load a deck, check it, preview it, configure the kiosk, then go live.']),
+        h('h1', {}, ['stuPad v1.1 setup']),
+        h('p', { class: 'setup-sub' }, ['Load linked PowerPoint, configure the kiosk, go live, run reports.']),
       ]),
       this.renderLoadStep(),
       this.renderCheckStep(),
