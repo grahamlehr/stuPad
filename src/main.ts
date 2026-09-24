@@ -102,6 +102,7 @@ class App {
   private async enterKiosk(): Promise<void> {
     if (!this.deck || !this.config || !this.sessionId) return;
     this.screen = 'kiosk';
+    document.documentElement.classList.add('kiosk-active');
     this.appRoot.innerHTML = '';
     this.kioskRoot.style.display = 'block';
     this.kioskRoot.innerHTML = '';
@@ -180,6 +181,7 @@ class App {
     this.closeAdmin();
     this.controller?.stop();
     this.controller = null;
+    document.documentElement.classList.remove('kiosk-active');
     await setKioskState({ running: false, sessionId: null, startedAt: null });
     this.sessionId = null;
     this.showSetup();

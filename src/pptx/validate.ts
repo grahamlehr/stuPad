@@ -9,6 +9,36 @@ const MAX_BYTES = 100 * 1024 * 1024;
 const MIN_BUTTON_PT = 44;
 
 /**
+ * Slides reachable from slide 1 via a home-slide button, then any chain of nav links
+ * (BFS). Always includes 1. Used for `unlinked_slide`/`no_home_link`, since a slide
+ * reached only through a further nav link (e.g. Home -> slide 2 -> "Next" -> slide 3)
+ * is still "linked" even though slide 1 has no button pointing at it directly.
+ */
+function reachableSlides(deck: Deck): Set<number> {
+  const navBySource = new Map<number, number[]>();
+  for (const n of deck.navLinks ?? []) {
+    const list = navBySource.get(n.slide) ?? [];
+    list.push(n.targetSlide);
+    navBySource.set(n.slide, list);
+  }
+
+  const visited = new Set<number>([1]);
+  const queue: number[] = [1, ...deck.buttons.map((b) => b.targetSlide)];
+  for (const s of deck.buttons.map((b) => b.targetSlide)) visited.add(s);
+
+  while (queue.length > 0) {
+    const slide = queue.shift()!;
+    for (const next of navBySource.get(slide) ?? []) {
+      if (!visited.has(next)) {
+        visited.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  return visited;
+}
+
+/**
  * Deck-level checks that need only the parsed `Deck` model — no zip, no file bytes. Safe to
  * re-run against a deck loaded straight from storage (e.g. when Setup re-opens with a stored
  * deck), unlike `too_large` (needs the original file size) and `broken_link` (only detectable
@@ -40,18 +70,22 @@ export function validateDeck(deck: Deck): Issue[] {
     }
   }
 
-  const targetSlides = new Set(deck.buttons.map((b) => b.targetSlide));
   const homeLinkSlides = new Set(deck.homeLinks.map((h) => h.slide));
+  const reachable = reachableSlides(deck);
 
-  for (const target of targetSlides) {
-    if (!homeLinkSlides.has(target)) {
-      issues.push({ severity: 'warning', code: 'no_home_link', message: `Slide ${target} has no shape linking back to slide 1`, slide: target });
+  for (const slide of reachable) {
+    if (slide === 1) continue;
+    if (!homeLinkSlides.has(slide)) {
+      // A slide reachable only via a chain of nav links still needs a way home; the
+      // kiosk falls back to a synthesized Home button and the idle timeout, so this
+      // stays a warning rather than an error.
+      issues.push({ severity: 'warning', code: 'no_home_link', message: `Slide ${slide} has no shape linking back to slide 1`, slide });
     }
   }
 
   for (const slide of deck.slides) {
     if (slide.index === 1) continue;
-    if (!targetSlides.has(slide.index)) {
+    if (!reachable.has(slide.index)) {
       issues.push({ severity: 'warning', code: 'unlinked_slide', message: `Slide ${slide.index} is not linked from slide 1`, slide: slide.index });
     }
   }

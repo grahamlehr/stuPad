@@ -95,7 +95,13 @@ interface ElementBase {
   /** cNvPr name (Selection Pane name) */
   name: string;
   xfrm: Xfrm;
-  /** click action from cNvPr/a:hlinkClick with ppaction://hlinksldjump (or first/last/next slide jumps resolved to an index) */
+  /**
+   * click action from cNvPr/a:hlinkClick: either `ppaction://hlinksldjump` (an explicit
+   * "Link to: Slide N") or `ppaction://hlinkshowjump?jump=...` (firstslide/lastslide/
+   * nextslide/previousslide, resolved relative to the shape's own slide and clamped to
+   * the deck — see `resolveLink` in src/pptx/shapes.ts). Both forms end up as a plain
+   * 1-based target slide index; callers don't need to distinguish them.
+   */
   link?: SlideLink;
   hidden?: boolean;
 }
@@ -181,6 +187,21 @@ export interface HomeLinkDef {
   bounds: Rect;
 }
 
+/**
+ * A shape on a non-home slide that links onward to some slide other than slide 1 and
+ * other than its own slide (a "Next" / "Back" / etc. link, as opposed to a HomeLinkDef).
+ */
+export interface NavLinkDef {
+  slide: number;
+  id: string;
+  /** Selection Pane name, e.g. BTN_Next */
+  shapeName: string;
+  /** default label per the same rule as ButtonDef.defaultLabel */
+  label: string;
+  targetSlide: number;
+  bounds: Rect;
+}
+
 export interface Deck {
   /** uuid assigned at parse time */
   id: string;
@@ -194,6 +215,12 @@ export interface Deck {
   /** home-slide buttons in reading order (top-to-bottom, then left-to-right) */
   buttons: ButtonDef[];
   homeLinks: HomeLinkDef[];
+  /**
+   * Shapes on non-home slides that link onward to a further slide (not slide 1, not
+   * their own slide). Decks stored before this field existed won't have it — treat a
+   * missing value as `[]` (`deck.navLinks ?? []`) rather than assuming it's present.
+   */
+  navLinks: NavLinkDef[];
   /** mediaKey -> media (images, rasters). Keys are zip paths like "ppt/media/image1.png" or "raster/3.png" */
   media: Record<string, MediaItem>;
   /** font families used in the deck */
@@ -213,7 +240,8 @@ export interface Issue {
     | 'non_16_9'
     | 'no_home_link'
     | 'too_large'
-    | 'small_button';
+    | 'small_button'
+    | 'self_link';
   message: string;
   slide?: number;
 }
@@ -287,7 +315,8 @@ export type EventType =
   | 'miss_tap'
   | 'app_resume'
   | 'admin_unlock_fail'
-  | 'log_cleared';
+  | 'log_cleared'
+  | 'slide_nav';
 
 export type ReturnMethod = 'home_button' | 'tap' | 'timeout';
 

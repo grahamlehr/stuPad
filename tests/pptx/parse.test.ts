@@ -16,7 +16,7 @@ describe('parsePptx: good.pptx', () => {
     const result = await parsePptx(data, 'good.pptx');
     expect(result.deck).toBeDefined();
     const deck = result.deck!;
-    expect(deck.slides.length).toBe(6);
+    expect(deck.slides.length).toBe(7);
     expect(deck.slideWidthEmu).toBeGreaterThan(0);
     expect(deck.height).toBeCloseTo(1920 * (deck.slideHeightEmu / deck.slideWidthEmu), 1);
 
@@ -37,21 +37,29 @@ describe('parsePptx: good.pptx', () => {
     expect(deck.buttons.map((b) => b.shapeName)).toEqual(['BTN_Sustainability', 'BTN_Innovation', 'BTN_People', 'BTN_Contact']);
   });
 
-  it('detects home links on each destination slide', async () => {
+  it('detects home links on each destination slide, including the chained slide 7', async () => {
     const data = await loadFixture('good.pptx');
     const result = await parsePptx(data, 'good.pptx');
     const deck = result.deck!;
     const homeSlides = deck.homeLinks.map((h) => h.slide).sort();
-    expect(homeSlides).toEqual([2, 3, 4, 5]);
+    expect(homeSlides).toEqual([2, 3, 4, 5, 7]);
   });
 
-  it('flags slide 6 as unlinked (warning, not error)', async () => {
+  it('detects the Next/Back nav link chain between slide 2 and slide 7', async () => {
     const data = await loadFixture('good.pptx');
     const result = await parsePptx(data, 'good.pptx');
-    const unlinked = result.issues.find((i) => i.code === 'unlinked_slide');
-    expect(unlinked).toBeDefined();
-    expect(unlinked!.severity).toBe('warning');
-    expect(unlinked!.slide).toBe(6);
+    const deck = result.deck!;
+    const bySlide = new Map(deck.navLinks.map((n) => [n.slide, n]));
+    expect(bySlide.get(2)).toMatchObject({ shapeName: 'BTN_Next', label: 'Next', targetSlide: 7 });
+    expect(bySlide.get(7)).toMatchObject({ shapeName: 'BTN_Back', label: 'Back', targetSlide: 2 });
+    expect(deck.navLinks.length).toBe(2);
+  });
+
+  it('flags slide 6 as unlinked (warning, not error), but not slide 7 (reachable via nav link)', async () => {
+    const data = await loadFixture('good.pptx');
+    const result = await parsePptx(data, 'good.pptx');
+    const unlinked = result.issues.filter((i) => i.code === 'unlinked_slide');
+    expect(unlinked.map((i) => i.slide)).toEqual([6]);
   });
 
   it('resolves button fill colours and geometry', async () => {
@@ -119,6 +127,47 @@ describe('parsePptx: with-image.pptx', () => {
       expect(deck.media[pic.mediaKey].mime).toBe('image/png');
     }
     expect(dest.background.type).toBe('solid');
+  });
+});
+
+describe('parsePptx: multi-slide.pptx (nav link chains)', () => {
+  it('resolves an explicit slide-link "Next" as a nav link', async () => {
+    const data = await loadFixture('multi-slide.pptx');
+    const result = await parsePptx(data, 'multi-slide.pptx');
+    const deck = result.deck!;
+    const nav = deck.navLinks.find((n) => n.slide === 2);
+    expect(nav).toMatchObject({ shapeName: 'BTN_NextExplicit', targetSlide: 4 });
+  });
+
+  it('resolves a ppaction://hlinkshowjump?jump=nextslide action relative to its own slide', async () => {
+    const data = await loadFixture('multi-slide.pptx');
+    const result = await parsePptx(data, 'multi-slide.pptx');
+    const deck = result.deck!;
+    const nav = deck.navLinks.find((n) => n.slide === 3);
+    expect(nav).toMatchObject({ shapeName: 'BTN_NextAction', targetSlide: 4 });
+  });
+
+  it('flags a shape linking to its own slide as self_link (warning) and does not crash or add a nav link', async () => {
+    const data = await loadFixture('multi-slide.pptx');
+    const result = await parsePptx(data, 'multi-slide.pptx');
+    expect(result.deck).toBeDefined();
+    const deck = result.deck!;
+    const selfLink = result.issues.find((i) => i.code === 'self_link');
+    expect(selfLink).toBeDefined();
+    expect(selfLink!.severity).toBe('warning');
+    expect(selfLink!.slide).toBe(4);
+    expect(selfLink!.message).toContain('Slide 4');
+    expect(selfLink!.message).toContain('BTN_Self');
+    expect(deck.navLinks.some((n) => n.slide === 4 && n.targetSlide === 4)).toBe(false);
+
+    const errors = result.issues.filter((i) => i.severity === 'error');
+    expect(errors).toEqual([]);
+  });
+
+  it('every non-home slide is reachable (no unlinked_slide warnings)', async () => {
+    const data = await loadFixture('multi-slide.pptx');
+    const result = await parsePptx(data, 'multi-slide.pptx');
+    expect(result.issues.some((i) => i.code === 'unlinked_slide')).toBe(false);
   });
 });
 

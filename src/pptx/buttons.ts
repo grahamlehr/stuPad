@@ -1,4 +1,4 @@
-import type { ButtonDef, HomeLinkDef, SlideElement, SlideLink, Rect } from '../types';
+import type { ButtonDef, HomeLinkDef, NavLinkDef, SlideElement, SlideLink, Rect, Issue } from '../types';
 
 const DEFAULT_NAME_RE = /^(rectangle|oval|textbox|text box|group|rounded rectangle|picture|straight connector|elbow connector|freeform|shape|line|isoceles triangle|arrow|chevron|speech bubble|title|subtitle)\s*\d*$/i;
 const GOOGLE_SHAPE_RE = /^google shape;/i;
@@ -95,6 +95,50 @@ export function detectHomeLinks(slideIndex: number, elements: SlideElement[]): H
     if (link && link.targetSlide === 1) {
       out.push({ slide: slideIndex, id: el.id, bounds: boundsOf(el) });
     }
+  }
+  return out;
+}
+
+/**
+ * Detect shapes on a non-home slide that link onward to a further slide: not slide 1
+ * (that's a HomeLinkDef) and not the shape's own slide (that's a self_link warning,
+ * pushed to `issues` and otherwise ignored — an authoring error, not a crash).
+ */
+export function detectNavLinks(slideIndex: number, elements: SlideElement[], issues: Issue[]): NavLinkDef[] {
+  const out: NavLinkDef[] = [];
+  let n = 0;
+  const raw: { el: SlideElement; link: SlideLink }[] = [];
+  for (const el of elements) {
+    if (el.hidden) continue;
+    const link = findLink(el);
+    if (!link) continue;
+    if (link.targetSlide === slideIndex) {
+      issues.push({
+        severity: 'warning',
+        code: 'self_link',
+        message: `Slide ${slideIndex}: "${el.name || 'shape'}" links to its own slide`,
+        slide: slideIndex,
+      });
+      continue;
+    }
+    if (link.targetSlide === 1) continue; // a HomeLinkDef, handled separately
+    raw.push({ el, link });
+  }
+  raw.sort((a, b) => readingOrder({ bounds: boundsOf(a.el) }, { bounds: boundsOf(b.el) }));
+
+  for (const { el, link } of raw) {
+    n++;
+    const name = el.name ?? '';
+    const text = elementText(el);
+    const label = !looksLikeDefaultName(name) && name.trim() ? prettyName(name) : text ? text : `Link ${n}`;
+    out.push({
+      slide: slideIndex,
+      id: el.id,
+      shapeName: name,
+      label,
+      targetSlide: link.targetSlide,
+      bounds: boundsOf(el),
+    });
   }
   return out;
 }

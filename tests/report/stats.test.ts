@@ -260,3 +260,58 @@ describe('computeStats: multi-day / heatmap', () => {
     expect(stats.heatmap[1][1]).toBe(1);
   });
 });
+
+function nav(ts: string, opts: Partial<LogEvent> = {}): LogEvent {
+  return {
+    ts,
+    session_id: SID,
+    event: 'slide_nav',
+    slide_from: 2,
+    slide_to: 3,
+    ...opts,
+  };
+}
+
+describe('computeStats: slide views and nav taps', () => {
+  it('counts a slide arrival from button_press.slide_to', () => {
+    const events: LogEvent[] = [press('b1', '2026-10-14T09:00:00.000+00:00', { slide_to: 2 })];
+    const stats = computeStats(events, { b1: 'A' });
+    expect(stats.slideViews).toEqual([{ slide: 2, views: 1 }]);
+    expect(stats.totalNavTaps).toBe(0);
+  });
+
+  it('counts a slide arrival from slide_nav.slide_to, and tallies totalNavTaps separately from presses', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T09:00:00.000+00:00', { slide_to: 2 }),
+      nav('2026-10-14T09:00:05.000+00:00', { slide_from: 2, slide_to: 3, visit_id: 'v1', button_id: 'b1', button_label: 'A', dwell_ms: 5000 }),
+      nav('2026-10-14T09:00:10.000+00:00', { slide_from: 3, slide_to: 4, visit_id: 'v1', button_id: 'b1', button_label: 'A', dwell_ms: 5000 }),
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+    expect(stats.totalNavTaps).toBe(2);
+    // one arrival each at slides 2, 3 and 4
+    expect(stats.slideViews).toEqual([
+      { slide: 2, views: 1 },
+      { slide: 3, views: 1 },
+      { slide: 4, views: 1 },
+    ]);
+    // slide_nav must never be counted as a button_press
+    expect(stats.totalPresses).toBe(1);
+    expect(stats.buttons.find((b) => b.id === 'b1')?.presses).toBe(1);
+  });
+
+  it('sums repeated arrivals at the same slide across both event kinds', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T09:00:00.000+00:00', { slide_to: 2 }),
+      press('b2', '2026-10-14T09:01:00.000+00:00', { slide_to: 2 }),
+      nav('2026-10-14T09:02:00.000+00:00', { slide_from: 5, slide_to: 2 }),
+    ];
+    const stats = computeStats(events, { b1: 'A', b2: 'B' });
+    expect(stats.slideViews).toEqual([{ slide: 2, views: 3 }]);
+  });
+
+  it('empty log has no slide views and zero nav taps', () => {
+    const stats = computeStats([], {});
+    expect(stats.slideViews).toEqual([]);
+    expect(stats.totalNavTaps).toBe(0);
+  });
+});

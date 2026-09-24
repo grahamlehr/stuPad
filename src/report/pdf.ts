@@ -237,10 +237,28 @@ export async function buildPdf(
       [String(stats.missTaps), 'Miss taps'],
       [String(stats.buttons.length), 'Buttons'],
     ];
-    drawStatTiles(doc, MARGIN, contentTop + 10, statsW, tiles, 3);
+    if (stats.totalNavTaps > 0) tiles.push([String(stats.totalNavTaps), 'Onward nav taps']);
+    const afterTilesY = drawStatTiles(doc, MARGIN, contentTop + 10, statsW, tiles, 3);
 
     if (hasThumb) {
       await drawHomeThumbnail(doc, homeThumbPng, MARGIN + statsW + gap, contentTop, thumbW);
+    }
+
+    // "Slide views" — arrivals per slide from either a home-slide button press or an
+    // onward nav tap. Only shown when the deck actually has nav links in play (otherwise
+    // it would just duplicate the button-share numbers already on page 2).
+    if (stats.totalNavTaps > 0 && stats.slideViews.length > 0 && afterTilesY < PAGE_H - MARGIN - 20) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.setTextColor(60, 60, 60);
+      doc.text('Slide views', MARGIN, afterTilesY + 8);
+
+      const slideViewTiles: Array<[string, string]> = stats.slideViews.map((sv) => [
+        String(sv.views),
+        `Slide ${sv.slide}`,
+      ]);
+      const cols = Math.min(6, Math.max(3, slideViewTiles.length));
+      drawStatTiles(doc, MARGIN, afterTilesY + 14, CONTENT_W, slideViewTiles, cols);
     }
   }
 

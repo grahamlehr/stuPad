@@ -1,5 +1,5 @@
 export { computeStats } from './stats';
-export type { ReportStats, ButtonStats, ActivityBucket } from './stats';
+export type { ReportStats, ButtonStats, ActivityBucket, SlideViewStat } from './stats';
 export { toCsv, csvFileName, pdfFileName } from './csv';
 export { buttonColor } from './colors';
 export { buildPdf } from './pdf';

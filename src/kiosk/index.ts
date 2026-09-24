@@ -9,7 +9,7 @@
  * without a DOM or fake timers.
  */
 import { SlideStage } from '../render';
-import type { Deck, ButtonDef, KioskConfig, LogEvent, Rect, SecretPattern } from '../types';
+import type { Deck, ButtonDef, NavLinkDef, KioskConfig, LogEvent, Rect, SecretPattern } from '../types';
 import { uuid } from '../util';
 
 // ------------------------------------------------------------------ geometry
@@ -209,6 +209,10 @@ export class KioskController {
   private visitButtonId: string | undefined;
   private visitButtonLabel: string | undefined;
   private visitStartedAt = 0;
+  /** When the *current* destination slide was entered (updated on every nav tap), used
+   * for slide_nav's dwell_ms; distinct from visitStartedAt, which anchors the whole
+   * visit's dwell (used by return_home). */
+  private slideEnteredAt = 0;
 
   private lastAcceptedTapAt = -Infinity;
 
@@ -218,6 +222,7 @@ export class KioskController {
   private pressFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
 
   private fallbackHomeBounds: Rect | null = null;
+  private fallbackHomeEl: HTMLElement | null = null;
   private idleCountdownEl: HTMLElement | null = null;
 
   private wakeLock: WakeLockSentinelLike | null = null;
@@ -358,6 +363,7 @@ export class KioskController {
     this.visitButtonId = button.id;
     this.visitButtonLabel = label;
     this.visitStartedAt = this.now();
+    this.slideEnteredAt = this.visitStartedAt;
 
     this.log({
       event: 'button_press',
@@ -388,12 +394,48 @@ export class KioskController {
       this.returnHome('home_button', now);
       return;
     }
+    const navLink = (this.deck.navLinks ?? []).find((n) => n.slide === slide && pointInRect(px, py, n.bounds));
+    if (navLink) {
+      this.navigateTo(navLink, now);
+      return;
+    }
     if (this.config.returnMethods.tapAnywhere) {
       this.returnHome('tap', now);
       return;
     }
     // Any tap resets the timeout, even one that doesn't return home.
     this.resetDestinationTimer();
+  }
+
+  /** A tap on a destination-slide shape that links onward to a further slide (not slide 1,
+   * not its own slide - see detectNavLinks). Logs `slide_nav`, updates destSlide and the
+   * fallback Home button/timeout for the new slide. If a nav link ever targeted slide 1
+   * (it shouldn't - the parser treats that as a HomeLinkDef) this falls back to a normal
+   * return_home instead of a half-navigated state. */
+  private navigateTo(navLink: NavLinkDef, now: number): void {
+    if (navLink.targetSlide === 1) {
+      this.returnHome('home_button', now);
+      return;
+    }
+    const fromSlide = this.destSlide;
+    if (fromSlide === null) return;
+    const dwellMs = Math.max(0, Math.round(now - this.slideEnteredAt));
+
+    this.log({
+      event: 'slide_nav',
+      visit_id: this.visitId,
+      button_id: this.visitButtonId,
+      button_label: this.visitButtonLabel,
+      slide_from: fromSlide,
+      slide_to: navLink.targetSlide,
+      dwell_ms: dwellMs,
+    });
+
+    this.destSlide = navLink.targetSlide;
+    this.slideEnteredAt = now;
+    void this.stage?.show(navLink.targetSlide, { type: this.config.transition, ms: this.config.transitionMs });
+    this.setupFallbackHomeButton();
+    this.startDestinationTimer();
   }
 
   private returnHome(method: 'home_button' | 'tap' | 'timeout', now: number): void {
@@ -418,6 +460,10 @@ export class KioskController {
     this.visitButtonId = undefined;
     this.visitButtonLabel = undefined;
     this.fallbackHomeBounds = null;
+    if (this.fallbackHomeEl) {
+      this.fallbackHomeEl.remove();
+      this.fallbackHomeEl = null;
+    }
     this.clearIdleCountdown();
     void this.stage?.show(1, { type: this.config.transition, ms: this.config.transitionMs });
   }
@@ -501,6 +547,10 @@ export class KioskController {
 
   private setupFallbackHomeButton(): void {
     this.fallbackHomeBounds = null;
+    if (this.fallbackHomeEl) {
+      this.fallbackHomeEl.remove();
+      this.fallbackHomeEl = null;
+    }
     const overlay = this.stage?.overlay;
     const slide = this.destSlide;
     if (!overlay || slide === null) return;
@@ -537,6 +587,7 @@ export class KioskController {
     el.style.justifyContent = 'center';
     el.style.fontSize = '20px';
     overlay.appendChild(el);
+    this.fallbackHomeEl = el;
   }
 
   private showIdleCountdown(): void {

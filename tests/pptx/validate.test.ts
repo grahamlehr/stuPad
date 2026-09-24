@@ -35,6 +35,32 @@ describe('validateDeck: matches parsePptx deck-level issues', () => {
     expect(issue!.severity).toBe('error');
   });
 
+  it('treats a slide reached only through a chain of nav links as linked (no unlinked_slide), but still warns no_home_link if it lacks one', () => {
+    const deck = {
+      id: 'd2',
+      fileName: 'chain.pptx',
+      parsedAt: new Date().toISOString(),
+      slideWidthEmu: 12192000,
+      slideHeightEmu: 6858000,
+      height: 1080,
+      slides: [{ index: 1, background: { type: 'none' }, elements: [] }, { index: 2, background: { type: 'none' }, elements: [] }, { index: 3, background: { type: 'none' }, elements: [] }],
+      buttons: [
+        { id: 'b1', shapeName: 'BTN_A', text: 'A', defaultLabel: 'A', targetSlide: 2, bounds: { x: 0, y: 0, w: 200, h: 200 } },
+        { id: 'b2', shapeName: 'BTN_B', text: 'B', defaultLabel: 'B', targetSlide: 2, bounds: { x: 200, y: 0, w: 200, h: 200 } },
+      ],
+      homeLinks: [{ slide: 2, id: 'h1', bounds: { x: 0, y: 0, w: 100, h: 100 } }],
+      // Slide 2 has a Next link to slide 3, but slide 3 has no home link back.
+      navLinks: [{ slide: 2, id: 'n1', shapeName: 'BTN_Next', label: 'Next', targetSlide: 3, bounds: { x: 100, y: 100, w: 100, h: 100 } }],
+      media: {},
+      fonts: [],
+    };
+    const issues = validateDeck(deck as never);
+    expect(issues.some((i) => i.code === 'unlinked_slide' && i.slide === 3)).toBe(false);
+    expect(issues.some((i) => i.code === 'no_home_link' && i.slide === 3)).toBe(true);
+    // Slide 2 does have a home link, so it should not be flagged.
+    expect(issues.some((i) => i.code === 'no_home_link' && i.slide === 2)).toBe(false);
+  });
+
   it('returns no issues for an empty-slide deck (that case needs no_slides, which validateDeck omits)', () => {
     const deck = {
       id: 'd1',
@@ -46,6 +72,7 @@ describe('validateDeck: matches parsePptx deck-level issues', () => {
       slides: [],
       buttons: [],
       homeLinks: [],
+      navLinks: [],
       media: {},
       fonts: [],
     };

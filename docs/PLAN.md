@@ -13,7 +13,7 @@ Source of truth for requirements: [SPEC.md](SPEC.md). Shared contracts: [`src/ty
 
 | Dir | Owner (phase) | Responsibility | Public API |
 | --- | --- | --- | --- |
-| `src/pptx/` + `scripts/make-template.mjs` | Agent A (1) | Unzip, parse slides/layouts/masters/theme, resolve colours/fonts/backgrounds, detect buttons & home links, validate | `parsePptx(input: Blob \| ArrayBuffer, fileName: string): Promise<ParseResult>` |
+| `src/pptx/` + `scripts/make-template.mjs` | Agent A (1) | Unzip, parse slides/layouts/masters/theme, resolve colours/fonts/backgrounds, detect buttons, home links & onward nav links, validate (reachability via buttons + nav-link chains) | `parsePptx(input: Blob \| ArrayBuffer, fileName: string): Promise<ParseResult>` |
 | `src/render/` | Agent B (1) | Deck model → DOM at SLIDE_W x height, stage that letterboxes to screen, thumbnails, raster fallback | see below |
 | `src/store/`, `src/kiosk/` | Agent C (1) | IndexedDB persistence + append-only log; kiosk runtime state machine | see below |
 | `src/report/` | Agent D (1) | Stats, CSV, PDF (charts on canvas), share-sheet export | see below |
@@ -68,7 +68,7 @@ export class SecretSequenceDetector { constructor(pattern, windowMs, cornerFract
 export function checklist(): string[]; export async function acquireWakeLock(): Promise<boolean>
 ```
 
-Kiosk rules (SPEC "Kiosk mode behaviour"): secret sequence checked before normal handling (corner taps never trigger buttons); home: button hit → `button_press` + new visit_id + transition; else `miss_tap` with x/y %; destination: home-link hit / tap-anywhere / timeout → `return_home` with method + dwell_ms; timeout resets on any tap; debounce ignores repeat taps (not logged); idle warning countdown in last 5 s; press feedback; disable gestures (touch-action, user-select, contextmenu, gesturestart, dblclick); visibilitychange re-acquires wake lock. If `returnMethods.homeButton` is on and a destination slide has no home link, show a discreet ≥44pt "Home" overlay button so users are never stranded.
+Kiosk rules (SPEC "Kiosk mode behaviour"): secret sequence checked before normal handling (corner taps never trigger buttons); home: button hit → `button_press` + new visit_id + transition; else `miss_tap` with x/y %; destination: home-link hit → `return_home`, else a nav-link hit (deck.navLinks for the current slide) → `slide_nav` + move to the target slide (still destination mode: fallback Home button and timeout are re-applied for the new slide) → else tap-anywhere / timeout → `return_home` with method + dwell_ms (the whole visit's dwell, from the first button press, not just the last slide); `slide_nav`'s own dwell_ms is just the time on the slide being left; timeout resets on any tap, including a nav tap; debounce ignores repeat taps (not logged); idle warning countdown in last 5 s; press feedback; disable gestures (touch-action, user-select, contextmenu, gesturestart, dblclick); visibilitychange re-acquires wake lock. If `returnMethods.homeButton` is on and a destination slide has no home link (whether reached directly or via a chain of nav links), show a discreet ≥44pt "Home" overlay button so users are never stranded; the previous slide's fallback button (if any) is removed before drawing a new one.
 
 ### Report API (`src/report/index.ts`)
 
