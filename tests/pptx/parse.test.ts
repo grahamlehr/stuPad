@@ -209,6 +209,6 @@ describe('template run links', () => {
     const zip = await JSZip.loadAsync(buf);
     const xml = await zip.file('ppt/slides/slide1.xml')!.async('string');
     expect(xml).not.toMatch(/u="sng"/);
-    expect(xml.match(/<a:hlinkClick/g)?.length).toBe(4);
+    expect(xml.match(/<a:hlinkClick/g)?.length).toBe(5);
   });
 });
