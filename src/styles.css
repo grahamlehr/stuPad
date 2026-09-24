@@ -2,14 +2,18 @@
    Light theme with a dark-mode variant; large touch targets (>= 44pt) throughout. */
 
 :root {
-  --bg: #f5f3ee;
+  /* "Cobalt sky" palette: cobalt blue primary, navy for strong emphasis,
+     sky blue for secondary/hover accents, slate blue-grey for muted text/borders. */
+  --bg: #f7f9fb;
   --surface: #ffffff;
-  --text: #1b2a4a;
-  --text-muted: #5b6472;
-  --border: #dcd8cf;
-  --navy: #1b2a4a;
-  --accent: #2e7d6b;
+  --text: #101f38;
+  --text-muted: #5c7085;
+  --border: #cdd8e2;
+  --navy: #000080;
+  --accent: #0047ab;
   --accent-contrast: #ffffff;
+  --accent-secondary: #82c8e5;
+  --accent-secondary-contrast: #101f38;
   --danger: #b3261e;
   --danger-contrast: #ffffff;
   --warning-bg: #fff3cd;
@@ -23,11 +27,14 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14181f;
-    --surface: #1e232c;
+    --bg: #0b1220;
+    --surface: #131c30;
     --text: #eef1f6;
-    --text-muted: #a3adbb;
-    --border: #333a46;
+    --text-muted: #a9b8c9;
+    --border: #2b3a52;
+    --accent: #4d82d6;
+    --accent-secondary: #82c8e5;
+    --accent-secondary-contrast: #0b1220;
     --warning-bg: #4a3a00;
     --warning-text: #ffdd7a;
     --error-bg: #4a201d;
@@ -229,7 +236,7 @@ a {
 }
 
 .preview-btn-outline {
-  border: 3px solid #ffce45;
+  border: 3px solid var(--accent-secondary);
   box-sizing: border-box;
   cursor: pointer;
   display: flex;
@@ -238,8 +245,8 @@ a {
 }
 
 .preview-btn-label {
-  background: #ffce45;
-  color: #1b2a4a;
+  background: var(--accent-secondary);
+  color: var(--accent-secondary-contrast);
   font-size: 22px;
   font-weight: 700;
   padding: 2px 8px;

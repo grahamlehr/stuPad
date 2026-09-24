@@ -405,8 +405,8 @@ export function drawHeatmapChart(
   for (const row of matrix) for (const v of row) max = Math.max(max, v);
   max = Math.max(1, max);
 
-  // base colour ramp from light to the first palette colour (blue-safe: use a fixed blue ramp)
-  const rampTo = { r: 0, g: 114, b: 178 }; // Okabe-Ito blue
+  // base colour ramp from light to the brand accent (cobalt blue, #0047AB)
+  const rampTo = { r: 0, g: 71, b: 171 };
 
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';

@@ -19,8 +19,8 @@ export default defineConfig({
         short_name: 'stuPad',
         display: 'fullscreen',
         orientation: 'landscape',
-        background_color: '#000000',
-        theme_color: '#000000',
+        background_color: '#000080',
+        theme_color: '#000080',
         start_url: base,
         scope: base,
         icons: [
