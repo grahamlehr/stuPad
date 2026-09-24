@@ -23,3 +23,20 @@ export function buttonColor(i: number): string {
 }
 
 export const PALETTE_SIZE = PALETTE.length;
+
+/**
+ * Neutral, deliberately un-categorical colours for the three return methods
+ * (Home button / Tap / Timeout). Kept visually distinct from `PALETTE` above
+ * so a return-method chart never reuses a colour a nearby button chart
+ * assigned to an actual button.
+ */
+const RETURN_METHOD_PALETTE: Record<'home_button' | 'tap' | 'timeout', string> = {
+  home_button: '#3B5169', // slate blue-grey
+  tap: '#8A8D91', // neutral grey
+  timeout: '#A15C2E', // burnt sienna
+};
+
+/** Deterministic colour for a return method, distinct from every `buttonColor(i)`. */
+export function returnMethodColor(method: 'home_button' | 'tap' | 'timeout'): string {
+  return RETURN_METHOD_PALETTE[method];
+}

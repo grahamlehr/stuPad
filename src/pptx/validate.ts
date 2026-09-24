@@ -8,17 +8,16 @@ const ASPECT_TOLERANCE = 0.01;
 const MAX_BYTES = 100 * 1024 * 1024;
 const MIN_BUTTON_PT = 44;
 
-export function validateDeck(deck: Deck, fileSizeBytes: number): Issue[] {
+/**
+ * Deck-level checks that need only the parsed `Deck` model — no zip, no file bytes. Safe to
+ * re-run against a deck loaded straight from storage (e.g. when Setup re-opens with a stored
+ * deck), unlike `too_large` (needs the original file size) and `broken_link` (only detectable
+ * while parsing the raw XML — a link that couldn't be resolved never becomes part of the Deck
+ * model in the first place, so there is nothing left in `deck` to check).
+ */
+export function validateDeck(deck: Deck): Issue[] {
   const issues: Issue[] = [];
-
-  if (fileSizeBytes > MAX_BYTES) {
-    issues.push({ severity: 'error', code: 'too_large', message: `File is ${(fileSizeBytes / 1024 / 1024).toFixed(1)} MB, which exceeds the 100 MB limit` });
-  }
-
-  if (deck.slides.length === 0) {
-    issues.push({ severity: 'error', code: 'no_slides', message: 'The presentation has no slides' });
-    return issues;
-  }
+  if (deck.slides.length === 0) return issues;
 
   const aspect = deck.slideWidthEmu / deck.slideHeightEmu;
   if (Math.abs(aspect - SIXTEEN_NINE) > ASPECT_TOLERANCE) {
@@ -63,5 +62,25 @@ export function validateDeck(deck: Deck, fileSizeBytes: number): Issue[] {
     }
   }
 
+  return issues;
+}
+
+/**
+ * Full validation run at parse time: file-size and empty-deck checks (which need the raw
+ * file size and can't be re-derived from a stored `Deck`) plus every `validateDeck` check.
+ */
+export function validateDeckAndSize(deck: Deck, fileSizeBytes: number): Issue[] {
+  const issues: Issue[] = [];
+
+  if (fileSizeBytes > MAX_BYTES) {
+    issues.push({ severity: 'error', code: 'too_large', message: `File is ${(fileSizeBytes / 1024 / 1024).toFixed(1)} MB, which exceeds the 100 MB limit` });
+  }
+
+  if (deck.slides.length === 0) {
+    issues.push({ severity: 'error', code: 'no_slides', message: 'The presentation has no slides' });
+    return issues;
+  }
+
+  issues.push(...validateDeck(deck));
   return issues;
 }

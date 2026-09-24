@@ -708,6 +708,38 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+/** Renders one already-built slide DOM tree to a PNG blob via an SVG <foreignObject> snapshot. */
+async function rasterizeSlideEl(
+  slideEl: HTMLElement,
+  deckHeight: number,
+  widthPx: number,
+  heightPx: number,
+): Promise<Blob | null> {
+  const xmlns = 'http://www.w3.org/1999/xhtml';
+  const wrapper = document.createElement('div');
+  wrapper.setAttribute('xmlns', xmlns);
+  const styleEl = document.createElement('style');
+  styleEl.textContent = STYLE_TEXT;
+  wrapper.appendChild(styleEl);
+  wrapper.appendChild(slideEl);
+
+  const svgString =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${SLIDE_W}" height="${deckHeight}">` +
+    `<foreignObject width="100%" height="100%">${wrapper.outerHTML}</foreignObject>` +
+    `</svg>`;
+  const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgString)}`;
+
+  const img = await loadImage(svgUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width = widthPx;
+  canvas.height = heightPx;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('no 2d context');
+  ctx.drawImage(img, 0, 0, widthPx, heightPx);
+
+  return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+}
+
 /**
  * Renders each slide to a PNG via an SVG <foreignObject> snapshot of the same DOM the live
  * renderer builds, and stores the results into a cloned Deck's media map as `raster/N.png`
@@ -738,29 +770,7 @@ export async function rasterizeDeck(deck: Deck, widthPx = 1600): Promise<Deck> {
     const slide = newSlides[i];
     try {
       const slideEl = buildSlideEl(deck, slide, dataUrlCache, false);
-      const xmlns = 'http://www.w3.org/1999/xhtml';
-      const wrapper = document.createElement('div');
-      wrapper.setAttribute('xmlns', xmlns);
-      const styleEl = document.createElement('style');
-      styleEl.textContent = STYLE_TEXT;
-      wrapper.appendChild(styleEl);
-      wrapper.appendChild(slideEl);
-
-      const svgString =
-        `<svg xmlns="http://www.w3.org/2000/svg" width="${SLIDE_W}" height="${deck.height}">` +
-        `<foreignObject width="100%" height="100%">${wrapper.outerHTML}</foreignObject>` +
-        `</svg>`;
-      const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgString)}`;
-
-      const img = await loadImage(svgUrl);
-      const canvas = document.createElement('canvas');
-      canvas.width = widthPx;
-      canvas.height = heightPx;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('no 2d context');
-      ctx.drawImage(img, 0, 0, widthPx, heightPx);
-
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      const blob = await rasterizeSlideEl(slideEl, deck.height, widthPx, heightPx);
       if (!blob) throw new Error('toBlob failed');
 
       const key = `raster/${slide.index}.png`;
@@ -772,6 +782,62 @@ export async function rasterizeDeck(deck: Deck, widthPx = 1600): Promise<Deck> {
   }
 
   return { ...deck, media: newMedia, slides: newSlides };
+}
+
+/**
+ * Renders a single slide (1-based `index`) to a PNG blob, e.g. for a cheap report thumbnail
+ * without rasterizing the whole deck. Returns `null` (never throws) on any failure — the same
+ * `<foreignObject>` snapshot technique as `rasterizeDeck` can fail on some WebKit versions.
+ */
+export async function rasterizeSlide(deck: Deck, index: number, widthPx = 800): Promise<Blob | null> {
+  const slide = deck.slides[index - 1];
+  if (!slide) return null;
+  try {
+    ensureStyles();
+    const heightPx = Math.round((widthPx * deck.height) / SLIDE_W);
+
+    const dataUrlCache = new Map<string, string>();
+    for (const key of collectSlideMediaKeys(slide)) {
+      const item = deck.media[key];
+      if (!item) continue;
+      try {
+        dataUrlCache.set(key, await blobToDataUrl(item.blob));
+      } catch {
+        // leave unresolved; that image will just fail to load in the snapshot
+      }
+    }
+
+    const slideEl = buildSlideEl(deck, slide, dataUrlCache, false);
+    return await rasterizeSlideEl(slideEl, deck.height, widthPx, heightPx);
+  } catch {
+    return null;
+  }
+}
+
+function collectSlideMediaKeys(slide: Slide): Set<string> {
+  const keys = new Set<string>();
+  const addFill = (fill: Fill | undefined) => {
+    if (fill?.type === 'image') keys.add(fill.mediaKey);
+  };
+  const walk = (el: SlideElement): void => {
+    switch (el.kind) {
+      case 'picture':
+        keys.add(el.mediaKey);
+        break;
+      case 'shape':
+        addFill(el.fill);
+        break;
+      case 'group':
+        el.children.forEach(walk);
+        break;
+      case 'table':
+        for (const row of el.rows) for (const cell of row) addFill(cell.fill);
+        break;
+    }
+  };
+  addFill(slide.background);
+  slide.elements.forEach(walk);
+  return keys;
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {

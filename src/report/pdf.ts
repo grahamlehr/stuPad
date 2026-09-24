@@ -2,7 +2,7 @@
 import type { jsPDF } from 'jspdf';
 import type { Deck, KioskConfig, LogEvent } from '../types';
 import { computeStats, type ReportStats } from './stats';
-import { buttonColor } from './colors';
+import { buttonColor, returnMethodColor } from './colors';
 import {
   drawDonutChart,
   drawDwellBarChart,
@@ -52,10 +52,11 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
 
 /** Draws a chart at 2x for crisp print output (~200 dpi at the placed sizes), returns a PNG data URL. */
 function renderChartImage<T>(
-  draw: (ctx: CanvasRenderingContext2D | null, w: number, h: number, data: T) => void,
+  draw: (ctx: CanvasRenderingContext2D | null, w: number, h: number, data: T, fontScale?: number) => void,
   data: T,
   cssW: number,
   cssH: number,
+  fontScale = 1,
   dpr = 2,
 ): string {
   const canvas = document.createElement('canvas');
@@ -63,8 +64,24 @@ function renderChartImage<T>(
   canvas.height = Math.round(cssH * dpr);
   const ctx = canvas.getContext('2d') as CanvasRenderingContext2D | null;
   if (ctx) ctx.scale(dpr, dpr);
-  draw(ctx, cssW, cssH, data);
+  draw(ctx, cssW, cssH, data, fontScale);
   return canvas.toDataURL('image/png');
+}
+
+const PT_TO_MM = 0.352778;
+/** Minimum on-paper text size for chart text, in print points. */
+const MIN_CHART_PT = 9;
+
+/**
+ * A chart is drawn at `cssW` CSS px but placed into the PDF at `wMm` millimetres — often a
+ * big reduction. This works out the font-size multiplier (fed to the chart's `fontScale`
+ * param) so that `baseFontPx` (the chart's smallest text, at scale 1) still prints at
+ * `MIN_CHART_PT` or larger once placed at that width. Never shrinks below the original design.
+ */
+function fontScaleFor(cssW: number, wMm: number, baseFontPx: number, targetPt = MIN_CHART_PT): number {
+  const pxPerMm = cssW / wMm;
+  const minPx = pxPerMm * targetPt * PT_TO_MM;
+  return Math.max(1, minPx / baseFontPx);
 }
 
 function placeImage(
@@ -100,24 +117,61 @@ function addFooters(doc: jsPDF, sessionName: string, generatedAt: string): void 
   }
 }
 
-function labelValuePairs(
+/** Lays out `[value, label]` pairs as large stat tiles in a `cols`-wide grid, row-major. */
+function drawStatTiles(
   doc: jsPDF,
   x: number,
   y: number,
-  rows: Array<[string, string]>,
-  lineH = 8,
+  totalW: number,
+  tiles: Array<[string, string]>,
+  cols: number,
 ): number {
-  doc.setFontSize(11);
-  for (const [label, value] of rows) {
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(100, 100, 100);
-    doc.text(label, x, y);
+  const gap = 6;
+  const tileW = (totalW - gap * (cols - 1)) / cols;
+  const tileH = 26;
+  const rowGap = 8;
+
+  tiles.forEach(([value, label], i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const tx = x + col * (tileW + gap);
+    const ty = y + row * (tileH + rowGap);
+
+    doc.setDrawColor(224, 224, 224);
+    doc.setFillColor(248, 248, 248);
+    doc.roundedRect(tx, ty, tileW, tileH, 2, 2, 'FD');
+
     doc.setFont('helvetica', 'bold');
+    doc.setFontSize(19);
     doc.setTextColor(20, 20, 20);
-    doc.text(value, x + 62, y);
-    y += lineH;
+    doc.text(value, tx + tileW / 2, ty + tileH * 0.52, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(110, 110, 110);
+    doc.text(label, tx + tileW / 2, ty + tileH - 5, { align: 'center' });
+  });
+
+  const rows = Math.ceil(tiles.length / cols);
+  return y + rows * (tileH + rowGap);
+}
+
+/** Draws the home-slide thumbnail box; best-effort, silently omitted if `png` is missing or fails to load. */
+async function drawHomeThumbnail(doc: jsPDF, png: Blob | undefined, x: number, y: number, boxW: number): Promise<void> {
+  if (!png) return;
+  try {
+    const dataUrl = await blobToDataUrl(png);
+    const boxH = boxW * (9 / 16);
+    doc.setDrawColor(210, 210, 210);
+    doc.rect(x - 1, y - 1, boxW + 2, boxH + 2);
+    doc.addImage(dataUrl, 'PNG', x, y, boxW, boxH, undefined, 'FAST');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(130, 130, 130);
+    doc.text('Home slide', x, y + boxH + 6);
+  } catch {
+    // thumbnail is best-effort; the report is still valid without it
   }
-  return y;
 }
 
 /**
@@ -162,34 +216,31 @@ export async function buildPdf(
     doc.setFontSize(14);
     doc.setTextColor(100, 100, 100);
     doc.text('No interactions recorded.', MARGIN, MARGIN + 34);
+    await drawHomeThumbnail(doc, homeThumbPng, PAGE_W / 2 - 55, MARGIN + 46, 110);
   } else {
+    const contentTop = MARGIN + 28;
     const rangeStr = `${formatTs(stats.firstTs)} – ${formatTs(stats.lastTs)}`;
-    labelValuePairs(doc, MARGIN, MARGIN + 32, [
-      ['Date / time range', rangeStr],
-      ['Total presses', String(stats.totalPresses)],
-      ['Total visits', String(stats.totalVisits)],
-      ['Average dwell', fmtDuration(stats.avgDwellMs)],
-      ['Miss taps', String(stats.missTaps)],
-      ['Buttons', String(stats.buttons.length)],
-    ]);
-  }
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.setTextColor(90, 90, 90);
+    doc.text(`Date / time range: ${rangeStr}`, MARGIN, contentTop);
 
-  if (homeThumbPng) {
-    try {
-      const dataUrl = await blobToDataUrl(homeThumbPng);
-      const boxW = 90;
-      const boxH = boxW * (9 / 16);
-      const x = PAGE_W - MARGIN - boxW;
-      const y = MARGIN + 10;
-      doc.setDrawColor(210, 210, 210);
-      doc.rect(x - 1, y - 1, boxW + 2, boxH + 2);
-      doc.addImage(dataUrl, 'PNG', x, y, boxW, boxH, undefined, 'FAST');
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
-      doc.setTextColor(130, 130, 130);
-      doc.text('Home slide', x, y + boxH + 6);
-    } catch {
-      // thumbnail is best-effort; the report is still valid without it
+    const thumbW = 96;
+    const gap = 10;
+    const hasThumb = !!homeThumbPng;
+    const statsW = hasThumb ? CONTENT_W - thumbW - gap : CONTENT_W;
+
+    const tiles: Array<[string, string]> = [
+      [String(stats.totalPresses), 'Total presses'],
+      [String(stats.totalVisits), 'Total visits'],
+      [fmtDuration(stats.avgDwellMs), 'Average dwell'],
+      [String(stats.missTaps), 'Miss taps'],
+      [String(stats.buttons.length), 'Buttons'],
+    ];
+    drawStatTiles(doc, MARGIN, contentTop + 10, statsW, tiles, 3);
+
+    if (hasThumb) {
+      await drawHomeThumbnail(doc, homeThumbPng, MARGIN + statsW + gap, contentTop, thumbW);
     }
   }
 
@@ -203,8 +254,9 @@ export async function buildPdf(
       value: b.presses,
       color: colorForId(b.id),
     }));
-    const donutUrl = renderChartImage(drawDonutChart, donutData, 820, 440);
-    const donutH = placeImage(doc, donutUrl, 820, 440, MARGIN, MARGIN + 12, CONTENT_W * 0.56);
+    const donutW = CONTENT_W * 0.56;
+    const donutUrl = renderChartImage(drawDonutChart, donutData, 820, 440, fontScaleFor(820, donutW, 12));
+    const donutH = placeImage(doc, donutUrl, 820, 440, MARGIN, MARGIN + 12, donutW);
 
     const dwellData: NamedValue[] = stats.buttons.map((b) => ({
       label: b.label,
@@ -213,7 +265,7 @@ export async function buildPdf(
     }));
     const dwellX = MARGIN + CONTENT_W * 0.56 + 6;
     const dwellW = CONTENT_W - CONTENT_W * 0.56 - 6;
-    const dwellUrl = renderChartImage(drawDwellBarChart, dwellData, 640, 440);
+    const dwellUrl = renderChartImage(drawDwellBarChart, dwellData, 640, 440, fontScaleFor(640, dwellW, 13));
     placeImage(doc, dwellUrl, 640, 440, dwellX, MARGIN + 12, dwellW);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
@@ -235,7 +287,7 @@ export async function buildPdf(
       })),
       series: stats.buttons.map((b) => ({ id: b.id, label: b.label, color: colorForId(b.id) })),
     };
-    const activityUrl = renderChartImage(drawActivityChart, activityData, 1600, 700);
+    const activityUrl = renderChartImage(drawActivityChart, activityData, 1600, 700, fontScaleFor(1600, CONTENT_W, 10));
     placeImage(doc, activityUrl, 1600, 700, MARGIN, MARGIN + 18, CONTENT_W);
     drawLegend(doc, stats.buttons.map((b) => ({ label: b.label, color: colorForId(b.id) })), MARGIN, PAGE_H - MARGIN - 6);
 
@@ -243,15 +295,15 @@ export async function buildPdf(
     doc.addPage();
     drawPageTitle(doc, 'Return behaviour');
 
-    const methodColors: Record<string, string> = { home_button: '#0072B2', tap: '#009E73', timeout: '#D55E00' };
     const methodLabels: Record<string, string> = { home_button: 'Home button', tap: 'Tap', timeout: 'Timeout' };
     const methodData: NamedValue[] = (['home_button', 'tap', 'timeout'] as const).map((m) => ({
       label: methodLabels[m],
       value: stats.returnsByMethod[m],
-      color: methodColors[m],
+      color: returnMethodColor(m),
     }));
-    const methodUrl = renderChartImage(drawBarChart, methodData, 520, 440);
-    placeImage(doc, methodUrl, 520, 440, MARGIN, MARGIN + 12, CONTENT_W * 0.42);
+    const methodW = CONTENT_W * 0.42;
+    const methodUrl = renderChartImage(drawBarChart, methodData, 520, 440, fontScaleFor(520, methodW, 12));
+    placeImage(doc, methodUrl, 520, 440, MARGIN, MARGIN + 12, methodW);
 
     const timeoutData: NamedValue[] = stats.buttons.map((b) => ({
       label: b.label,
@@ -264,7 +316,7 @@ export async function buildPdf(
     doc.setFontSize(10);
     doc.setTextColor(120, 120, 120);
     doc.text('Timeout share by button (%)', timeoutX, MARGIN + 10);
-    const timeoutUrl = renderChartImage(drawPercentBarChart, timeoutData, 640, 440);
+    const timeoutUrl = renderChartImage(drawPercentBarChart, timeoutData, 640, 440, fontScaleFor(640, timeoutW, 13));
     placeImage(doc, timeoutUrl, 640, 440, timeoutX, MARGIN + 14, timeoutW);
 
     // ---------------------------------------------------------------- page 5: Hour-by-day (multi-day only)
@@ -272,7 +324,7 @@ export async function buildPdf(
       doc.addPage();
       drawPageTitle(doc, 'Hour by day');
       const heatData: HeatmapChartData = { days: stats.heatmapDays, matrix: stats.heatmap };
-      const heatUrl = renderChartImage(drawHeatmapChart, heatData, 1600, 700);
+      const heatUrl = renderChartImage(drawHeatmapChart, heatData, 1600, 700, fontScaleFor(1600, CONTENT_W, 11));
       placeImage(doc, heatUrl, 1600, 700, MARGIN, MARGIN + 14, CONTENT_W);
     }
   }
@@ -292,18 +344,18 @@ function formatBucketLabel(startIso: string, includeDate: boolean): string {
 }
 
 function drawLegend(doc: jsPDF, items: Array<{ label: string; color: string }>, x: number, y: number): void {
-  doc.setFontSize(8);
+  doc.setFontSize(9);
   let cx = x;
   const cy = y;
   for (const item of items) {
     const rgb = hexToRgb(item.color);
     doc.setFillColor(rgb.r, rgb.g, rgb.b);
-    doc.rect(cx, cy - 2.6, 3, 3, 'F');
+    doc.rect(cx, cy - 3, 3.5, 3.5, 'F');
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(80, 80, 80);
     const w = doc.getTextWidth(item.label);
-    doc.text(item.label, cx + 4.5, cy);
-    cx += 4.5 + w + 8;
+    doc.text(item.label, cx + 5, cy);
+    cx += 5 + w + 8;
     if (cx > PAGE_W - MARGIN - 30) {
       cx = x;
     }

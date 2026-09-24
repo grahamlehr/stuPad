@@ -66,18 +66,31 @@ function clearBg(ctx: CanvasRenderingContext2D, width: number, height: number): 
   ctx.restore();
 }
 
+/**
+ * Every chart is drawn at a fixed CSS pixel size, then placed into the PDF at whatever
+ * millimetre width the page layout picks — which can shrink it a lot. `fontScale` lets the
+ * caller (see report/pdf.ts) compensate: it multiplies every font size in the chart so text
+ * stays legible (~9pt or more) once printed, no matter how small the placed image ends up.
+ * A scale of 1 reproduces the original (on-screen-sized) fonts.
+ */
+function scaledFont(basePx: number, fontScale: number, bold = false): string {
+  const px = Math.round(basePx * fontScale);
+  return `${bold ? 'bold ' : ''}${px}px ${FONT_FAMILY}`;
+}
+
 /** Donut of values with a legend listing label, count and share %. */
 export function drawDonutChart(
   ctx: CanvasRenderingContext2D | null,
   width: number,
   height: number,
   data: NamedValue[],
+  fontScale = 1,
 ): void {
   if (!ctx) return;
   clearBg(ctx, width, height);
   const total = data.reduce((s, d) => s + d.value, 0);
 
-  const legendW = Math.min(width * 0.42, 340);
+  const legendW = Math.min(Math.max(width * 0.42, 150 * fontScale), width * 0.56);
   const chartW = width - legendW;
   const cx = chartW / 2;
   const cy = height / 2;
@@ -86,7 +99,7 @@ export function drawDonutChart(
 
   if (total <= 0 || data.length === 0) {
     ctx.fillStyle = MUTED_COLOR;
-    ctx.font = `16px ${FONT_FAMILY}`;
+    ctx.font = scaledFont(16, fontScale);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('No data', cx, cy);
@@ -110,31 +123,33 @@ export function drawDonutChart(
     ctx.fill();
 
     ctx.fillStyle = TEXT_COLOR;
-    ctx.font = `bold 22px ${FONT_FAMILY}`;
+    ctx.font = scaledFont(22, fontScale, true);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(total), cx, cy - 8);
-    ctx.font = `12px ${FONT_FAMILY}`;
+    ctx.fillText(String(total), cx, cy - 8 * fontScale);
+    ctx.font = scaledFont(12, fontScale);
     ctx.fillStyle = MUTED_COLOR;
-    ctx.fillText('total', cx, cy + 12);
+    ctx.fillText('total', cx, cy + 12 * fontScale);
   }
 
   // legend
   const legendX = chartW + 16;
-  let ly = Math.max(16, height / 2 - (data.length * 22) / 2);
+  const swatch = Math.round(12 * fontScale);
+  const rowH = Math.max(32, 34 * fontScale);
+  let ly = Math.max(rowH / 2, height / 2 - (data.length * rowH) / 2);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   for (const d of data) {
     const pct = total > 0 ? (d.value / total) * 100 : 0;
     ctx.fillStyle = d.color;
-    ctx.fillRect(legendX, ly - 6, 12, 12);
+    ctx.fillRect(legendX, ly - swatch / 2, swatch, swatch);
     ctx.fillStyle = TEXT_COLOR;
-    ctx.font = `13px ${FONT_FAMILY}`;
-    ctx.fillText(`${d.label}`, legendX + 18, ly);
+    ctx.font = scaledFont(13, fontScale);
+    ctx.fillText(`${d.label}`, legendX + swatch + 6, ly);
     ctx.fillStyle = MUTED_COLOR;
-    ctx.font = `12px ${FONT_FAMILY}`;
-    ctx.fillText(`${d.value} (${fmtPct(pct)})`, legendX + 18, ly + 14);
-    ly += 32;
+    ctx.font = scaledFont(12, fontScale);
+    ctx.fillText(`${d.value} (${fmtPct(pct)})`, legendX + swatch + 6, ly + 14 * fontScale);
+    ly += rowH;
     if (ly > height - 8) break; // avoid drawing off-canvas for very long lists
   }
 }
@@ -145,26 +160,27 @@ export function drawDwellBarChart(
   width: number,
   height: number,
   data: NamedValue[],
+  fontScale = 1,
 ): void {
   if (!ctx) return;
   clearBg(ctx, width, height);
   if (data.length === 0) {
     ctx.fillStyle = MUTED_COLOR;
-    ctx.font = `16px ${FONT_FAMILY}`;
+    ctx.font = scaledFont(16, fontScale);
     ctx.textAlign = 'center';
     ctx.fillText('No data', width / 2, height / 2);
     return;
   }
 
-  const labelW = Math.min(width * 0.28, 220);
-  const valueW = 90;
+  const labelW = Math.min(Math.max(width * 0.28, 90 * fontScale), width * 0.4);
+  const valueW = Math.max(90, 64 * fontScale);
   const plotX = labelW;
   const plotW = width - labelW - valueW;
   const max = Math.max(1, ...data.map((d) => d.value));
   const rowH = height / data.length;
-  const barH = Math.min(28, rowH * 0.6);
+  const barH = Math.min(Math.max(28, 24 * fontScale), rowH * 0.6);
 
-  ctx.font = `13px ${FONT_FAMILY}`;
+  ctx.font = scaledFont(13, fontScale);
   data.forEach((d, i) => {
     const y = i * rowH + rowH / 2;
     ctx.fillStyle = TEXT_COLOR;
@@ -184,26 +200,30 @@ export function drawDwellBarChart(
 }
 
 /** Stacked bar of presses per interval, one colour per button, with time-axis labels. */
+/** Bars never grow wider than this even when a single bucket spans the whole plot. */
+const MAX_ACTIVITY_BAR_W = 140;
+
 export function drawActivityChart(
   ctx: CanvasRenderingContext2D | null,
   width: number,
   height: number,
   data: ActivityChartData,
+  fontScale = 1,
 ): void {
   if (!ctx) return;
   clearBg(ctx, width, height);
   const { buckets, series } = data;
 
-  const marginL = 40;
-  const marginB = 46;
-  const marginT = 16;
+  const marginL = Math.max(40, 30 * fontScale);
+  const marginB = Math.max(46, 38 * fontScale);
+  const marginT = Math.max(16, 12 * fontScale);
   const marginR = 12;
   const plotW = width - marginL - marginR;
   const plotH = height - marginT - marginB;
 
   if (buckets.length === 0) {
     ctx.fillStyle = MUTED_COLOR;
-    ctx.font = `16px ${FONT_FAMILY}`;
+    ctx.font = scaledFont(16, fontScale);
     ctx.textAlign = 'center';
     ctx.fillText('No data', width / 2, height / 2);
     return;
@@ -215,7 +235,7 @@ export function drawActivityChart(
   // gridlines + y axis labels (4 steps)
   ctx.strokeStyle = GRID_COLOR;
   ctx.fillStyle = MUTED_COLOR;
-  ctx.font = `11px ${FONT_FAMILY}`;
+  ctx.font = scaledFont(11, fontScale);
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
   const steps = 4;
@@ -230,7 +250,7 @@ export function drawActivityChart(
   }
 
   const slotW = plotW / buckets.length;
-  const barW = Math.max(1, slotW * 0.7);
+  const barW = Math.min(Math.max(1, slotW * 0.7), MAX_ACTIVITY_BAR_W);
   const labelEvery = Math.max(1, Math.ceil(buckets.length / 12));
 
   buckets.forEach((b, i) => {
@@ -248,7 +268,7 @@ export function drawActivityChart(
     if (i % labelEvery === 0) {
       ctx.save();
       ctx.fillStyle = MUTED_COLOR;
-      ctx.font = `10px ${FONT_FAMILY}`;
+      ctx.font = scaledFont(10, fontScale);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       ctx.fillText(b.label, x + barW / 2, marginT + plotH + 8);
@@ -270,19 +290,20 @@ export function drawBarChart(
   width: number,
   height: number,
   data: NamedValue[],
+  fontScale = 1,
 ): void {
   if (!ctx) return;
   clearBg(ctx, width, height);
   if (data.length === 0) {
     ctx.fillStyle = MUTED_COLOR;
-    ctx.font = `16px ${FONT_FAMILY}`;
+    ctx.font = scaledFont(16, fontScale);
     ctx.textAlign = 'center';
     ctx.fillText('No data', width / 2, height / 2);
     return;
   }
   const total = data.reduce((s, d) => s + d.value, 0);
-  const marginB = 40;
-  const marginT = 16;
+  const marginB = Math.max(40, 32 * fontScale);
+  const marginT = Math.max(16, 22 * fontScale);
   const plotH = height - marginT - marginB;
   const max = Math.max(1, ...data.map((d) => d.value));
   const slotW = width / data.length;
@@ -296,14 +317,14 @@ export function drawBarChart(
     ctx.fillRect(cx - barW / 2, y, barW, h);
 
     ctx.fillStyle = TEXT_COLOR;
-    ctx.font = `bold 13px ${FONT_FAMILY}`;
+    ctx.font = scaledFont(13, fontScale, true);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
     const pct = total > 0 ? (d.value / total) * 100 : 0;
     ctx.fillText(`${d.value} (${fmtPct(pct)})`, cx, y - 4);
 
     ctx.fillStyle = MUTED_COLOR;
-    ctx.font = `12px ${FONT_FAMILY}`;
+    ctx.font = scaledFont(12, fontScale);
     ctx.textBaseline = 'top';
     ctx.fillText(d.label, cx, marginT + plotH + 6);
   });
@@ -315,25 +336,26 @@ export function drawPercentBarChart(
   width: number,
   height: number,
   data: NamedValue[],
+  fontScale = 1,
 ): void {
   if (!ctx) return;
   clearBg(ctx, width, height);
   if (data.length === 0) {
     ctx.fillStyle = MUTED_COLOR;
-    ctx.font = `16px ${FONT_FAMILY}`;
+    ctx.font = scaledFont(16, fontScale);
     ctx.textAlign = 'center';
     ctx.fillText('No data', width / 2, height / 2);
     return;
   }
-  const labelW = Math.min(width * 0.28, 220);
-  const valueW = 60;
+  const labelW = Math.min(Math.max(width * 0.28, 90 * fontScale), width * 0.4);
+  const valueW = Math.max(60, 46 * fontScale);
   const plotX = labelW;
   const plotW = width - labelW - valueW;
   const max = Math.max(1, ...data.map((d) => d.value));
   const rowH = height / data.length;
-  const barH = Math.min(28, rowH * 0.6);
+  const barH = Math.min(Math.max(28, 24 * fontScale), rowH * 0.6);
 
-  ctx.font = `13px ${FONT_FAMILY}`;
+  ctx.font = scaledFont(13, fontScale);
   data.forEach((d, i) => {
     const y = i * rowH + rowH / 2;
     ctx.fillStyle = TEXT_COLOR;
@@ -358,21 +380,22 @@ export function drawHeatmapChart(
   width: number,
   height: number,
   data: HeatmapChartData,
+  fontScale = 1,
 ): void {
   if (!ctx) return;
   clearBg(ctx, width, height);
   const { days, matrix } = data;
   if (days.length === 0 || matrix.length === 0) {
     ctx.fillStyle = MUTED_COLOR;
-    ctx.font = `16px ${FONT_FAMILY}`;
+    ctx.font = scaledFont(16, fontScale);
     ctx.textAlign = 'center';
     ctx.fillText('No data', width / 2, height / 2);
     return;
   }
 
-  const labelW = 90;
-  const marginT = 20;
-  const marginB = 24;
+  const labelW = Math.max(90, 72 * fontScale);
+  const marginT = Math.max(20, 14 * fontScale);
+  const marginB = Math.max(24, 20 * fontScale);
   const plotW = width - labelW - 12;
   const plotH = height - marginT - marginB;
   const cellW = plotW / 24;
@@ -387,7 +410,7 @@ export function drawHeatmapChart(
 
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  ctx.font = `11px ${FONT_FAMILY}`;
+  ctx.font = scaledFont(11, fontScale);
 
   days.forEach((day, r) => {
     ctx.fillStyle = MUTED_COLOR;

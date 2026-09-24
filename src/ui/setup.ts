@@ -4,7 +4,7 @@
  */
 import type { Deck, Issue, KioskConfig, ButtonDef } from '../types';
 import { defaultConfig } from '../types';
-import { parsePptx } from '../pptx';
+import { parsePptx, validateDeck } from '../pptx';
 import { SlideStage, renderThumbnail, rasterizeDeck, releaseThumbnails } from '../render';
 import { checklist, acquireWakeLock } from '../kiosk';
 import { saveDeck, saveConfig, countEvents } from '../store';
@@ -51,17 +51,27 @@ export class SetupScreen {
   constructor(private readonly deps: SetupDeps) {
     this.deck = deps.initialDeck;
     this.config = deps.initialConfig ?? defaultConfig('deck');
-    if (this.deck) this.fileInfo = { name: this.deck.fileName, size: 0 };
+    if (this.deck) {
+      this.fileInfo = { name: this.deck.fileName, size: 0 };
+      // No raw file bytes for a deck loaded from storage (only `parsePptx` sees those), so
+      // re-run the deck-level checks the Check step still needs to show.
+      this.issues = validateDeck(this.deck);
+    }
     this.root = h('div', { class: 'setup-screen' });
     deps.container.appendChild(this.root);
     this.render();
   }
 
   destroy(): void {
+    this.destroyPreview();
+    this.root.remove();
+  }
+
+  /** Tears down the live preview (ResizeObserver + object URLs) — every teardown path goes through here. */
+  private destroyPreview(): void {
     this.previewStage?.destroy();
     this.previewStage = undefined;
     releaseThumbnails();
-    this.root.remove();
   }
 
   private persist(): void {
@@ -71,7 +81,14 @@ export class SetupScreen {
 
   // ------------------------------------------------------------- render
 
+  /**
+   * Full rebuild of the screen. `clear(this.root)` would otherwise detach the live preview's
+   * DOM (and any thumbnails) without tearing it down first, leaking its ResizeObserver and
+   * object URLs on every re-render — so always destroy it first; `renderPreviewStep` below
+   * mounts a fresh one when a deck is loaded.
+   */
   private render(): void {
+    this.destroyPreview();
     clear(this.root);
     this.root.append(
       h('header', { class: 'setup-header' }, [
@@ -84,6 +101,16 @@ export class SetupScreen {
       this.renderConfigureStep(),
       this.renderGoLiveStep(),
     );
+  }
+
+  /**
+   * Replaces a single `data-step` section in place, without touching the rest of the screen —
+   * in particular without tearing down and remounting the live preview (SlideStage +
+   * thumbnails) for a change that doesn't affect it, e.g. accepting warnings.
+   */
+  private replaceStep(step: string, el: HTMLElement): void {
+    const existing = this.root.querySelector(`[data-step="${step}"]`);
+    if (existing) existing.replaceWith(el);
   }
 
   // -------------------------------------------------------------- 1. load
@@ -175,7 +202,10 @@ export class SetupScreen {
                 checked: this.acceptedWarnings,
                 onchange: (e: Event) => {
                   this.acceptedWarnings = (e.target as HTMLInputElement).checked;
-                  this.render();
+                  // Only the check step's own text and the Go live step's ready-state depend
+                  // on this — no need to tear down and remount the live preview for it.
+                  this.replaceStep('check', this.renderCheckStep());
+                  this.replaceStep('golive', this.renderGoLiveStep());
                 },
               }),
               ' I accept these warnings',

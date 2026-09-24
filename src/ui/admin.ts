@@ -5,6 +5,7 @@
 import type { Deck, KioskConfig } from '../types';
 import { getEvents, countEvents, clearEvents } from '../store';
 import { computeStats, toCsv, csvFileName, pdfFileName, buildPdf, exportFile } from '../report';
+import { rasterizeSlide } from '../render';
 import { scopeToFilter, type ExportScope } from './export-scope';
 import { h, clear, fmtBytes } from './dom';
 
@@ -177,13 +178,30 @@ export class AdminPanel {
 
   private async exportPdf(): Promise<void> {
     const events = await getEvents(scopeToFilter(this.scope));
-    const home = this.deps.deck.slides[0];
-    const homeThumbPng =
-      home?.rasterKey && this.deps.deck.media[home.rasterKey] ? this.deps.deck.media[home.rasterKey].blob : undefined;
+    const homeThumbPng = await this.getHomeThumbnail();
     const blob = await buildPdf(events, this.deps.deck, this.deps.config, homeThumbPng);
     const fileName = pdfFileName(this.deps.config.sessionName);
     const file = new File([blob], fileName, { type: 'application/pdf' });
     await exportFile(file);
+  }
+
+  /**
+   * Best-effort PNG of slide 1 for the report's Summary page. Image-mode decks already have
+   * a pre-rasterised home slide (`rasterKey`), used directly; otherwise a single slide is
+   * rasterised on the fly. Never throws — a failure here (e.g. Safari canvas tainting) just
+   * means the PDF is built without a thumbnail.
+   */
+  private async getHomeThumbnail(): Promise<Blob | undefined> {
+    const home = this.deps.deck.slides[0];
+    if (home?.rasterKey && this.deps.deck.media[home.rasterKey]) {
+      return this.deps.deck.media[home.rasterKey].blob;
+    }
+    try {
+      const blob = await rasterizeSlide(this.deps.deck, 1);
+      return blob ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   // -------------------------------------------------------------- clear

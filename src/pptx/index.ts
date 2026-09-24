@@ -2,9 +2,10 @@ import type { ParseResult, Issue } from '../types';
 import { Pkg } from './zip';
 import { loadDeck } from './deck';
 import { detectButtons, detectHomeLinks } from './buttons';
-import { validateDeck } from './validate';
+import { validateDeckAndSize } from './validate';
 
 export { KNOWN_FONTS } from './fonts';
+export { validateDeck } from './validate';
 
 /**
  * Parse a .pptx file into the shared Deck model (src/types.ts).
@@ -48,7 +49,7 @@ export async function parsePptx(input: Blob | ArrayBuffer, fileName: string): Pr
   }
   deck.homeLinks = homeLinks;
 
-  const validationIssues = validateDeck(deck, sizeBytes);
+  const validationIssues = validateDeckAndSize(deck, sizeBytes);
 
   return { deck, issues: [...issues, ...validationIssues] };
 }
