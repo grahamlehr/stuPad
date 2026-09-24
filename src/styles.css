@@ -61,6 +61,14 @@ body {
   overscroll-behavior: none;
 }
 
+/* While the kiosk screen is live, force the document background to black so a slide
+   change's re-layout/re-raster never flashes the (near-white) --bg through unpainted tiles
+   on iPadOS Safari. Set/removed on <html> by main.ts around enterKiosk()/exitToSetup(). */
+html.kiosk-active,
+html.kiosk-active body {
+  background: #000;
+}
+
 #app {
   min-height: 100dvh;
 }

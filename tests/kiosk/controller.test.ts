@@ -76,6 +76,7 @@ function fakeDeck(): Deck {
       },
     ],
     homeLinks: [{ slide: 2, id: 'h1', bounds: { x: 300, y: 300, w: 100, h: 60 } }],
+    navLinks: [],
     media: {},
     fonts: [],
   };
@@ -293,5 +294,127 @@ describe('KioskController', () => {
 
     expect(logs).toHaveLength(0);
     expect(onAdminRequested).not.toHaveBeenCalled();
+  });
+});
+
+describe('KioskController: nav links (multi-slide chains)', () => {
+  let root: HTMLElement;
+  let logs: Omit<LogEvent, 'ts' | 'session_id'>[];
+  let onAdminRequested: Mock<() => void>;
+  let controller: InstanceType<typeof KioskController>;
+
+  // Slide 2 (button b1's target) has a Home link plus a "Next" nav link to slide 3.
+  // Slide 3 has a "Back" nav link to slide 2, but deliberately no home link, so the
+  // fallback Home overlay should appear there.
+  const NAV_TO_3 = { x: 550, y: 520 }; // inside n1 bounds (slide 2) and n2 bounds (slide 3), non-corner
+  const FALLBACK_HOME_POINT = { x: 950, y: 1000 }; // bottom-center fallback button on a 1920x1080 slide
+
+  function fakeChainDeck(): Deck {
+    const deck = fakeDeck();
+    deck.navLinks = [
+      { slide: 2, id: 'n1', shapeName: 'BTN_Next', label: 'Next', targetSlide: 3, bounds: { x: 500, y: 500, w: 200, h: 100 } },
+      { slide: 3, id: 'n2', shapeName: 'BTN_Back', label: 'Back', targetSlide: 2, bounds: { x: 500, y: 500, w: 200, h: 100 } },
+    ];
+    return deck;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    logs = [];
+    onAdminRequested = vi.fn<() => void>();
+  });
+
+  afterEach(() => {
+    controller?.stop();
+    root.remove();
+    vi.useRealTimers();
+  });
+
+  async function makeChainController(cfgOver: Partial<KioskConfig> = {}) {
+    controller = new KioskController({
+      root,
+      deck: fakeChainDeck(),
+      config: fakeConfig(cfgOver),
+      sessionId: 'sess-1',
+      log: (e) => logs.push(e),
+      onAdminRequested,
+    });
+    await controller.start();
+    return controller;
+  }
+
+  it('nav tap: tapping a nav-link shape on a destination slide logs slide_nav and moves to the target slide', async () => {
+    await makeChainController();
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // button_press -> slide 2
+    const visitId = logs[0].visit_id;
+    logs.length = 0;
+
+    vi.advanceTimersByTime(150);
+    tap(root, NAV_TO_3.x, NAV_TO_3.y);
+
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      event: 'slide_nav',
+      visit_id: visitId,
+      button_id: 'b1',
+      button_label: 'Button 1',
+      slide_from: 2,
+      slide_to: 3,
+    });
+    expect(typeof logs[0].dwell_ms).toBe('number');
+    expect(lastStage!.showCalls.at(-1)?.index).toBe(3);
+  });
+
+  it('a nav tap resets the destination timeout, and the eventual timeout return_home reports the slide actually left', async () => {
+    await makeChainController({ timeoutSec: 5, returnMethods: { homeButton: true, tapAnywhere: false, timeout: true } });
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2
+    logs.length = 0;
+
+    vi.advanceTimersByTime(3000);
+    tap(root, NAV_TO_3.x, NAV_TO_3.y); // -> slide 3, resets the timer
+    expect(logs).toHaveLength(1);
+    expect(logs[0].event).toBe('slide_nav');
+
+    vi.advanceTimersByTime(3000); // 6s since dest entry, but only 3s since the nav reset
+    expect(logs).toHaveLength(1);
+
+    vi.advanceTimersByTime(2001); // now past 5s since the nav reset
+    expect(logs).toHaveLength(2);
+    expect(logs[1]).toMatchObject({ event: 'return_home', method: 'timeout', slide_from: 3, slide_to: 1 });
+  });
+
+  it('return_home from a chained slide reports dwell_ms for the whole visit, not just the last slide', async () => {
+    await makeChainController();
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // t=0, -> slide 2
+    logs.length = 0;
+
+    vi.advanceTimersByTime(2000);
+    tap(root, NAV_TO_3.x, NAV_TO_3.y); // t=2000, -> slide 3
+    expect(logs[0].dwell_ms).toBeCloseTo(2000, -2);
+
+    vi.advanceTimersByTime(3000); // t=5000
+    tap(root, FALLBACK_HOME_POINT.x, FALLBACK_HOME_POINT.y); // fallback Home on slide 3 (no home link there)
+
+    expect(logs).toHaveLength(2);
+    expect(logs[1]).toMatchObject({ event: 'return_home', method: 'home_button', slide_from: 3, slide_to: 1 });
+    expect(logs[1].dwell_ms).toBeCloseTo(5000, -2); // whole visit, not just time on slide 3
+    expect(lastStage!.showCalls.at(-1)?.index).toBe(1);
+  });
+
+  it('the fallback Home overlay is (re)drawn for the new slide after a nav tap, with no stale element left behind', async () => {
+    await makeChainController();
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2 (has a real home link: no fallback drawn)
+    expect(lastStage!.overlay.querySelectorAll('.kiosk-fallback-home').length).toBe(0);
+
+    vi.advanceTimersByTime(150);
+    tap(root, NAV_TO_3.x, NAV_TO_3.y); // -> slide 3 (no home link: fallback should appear)
+    expect(lastStage!.overlay.querySelectorAll('.kiosk-fallback-home').length).toBe(1);
+
+    // Tapping the fallback returns home; nothing left behind in the overlay afterwards.
+    vi.advanceTimersByTime(150);
+    tap(root, FALLBACK_HOME_POINT.x, FALLBACK_HOME_POINT.y);
+    expect(lastStage!.overlay.querySelectorAll('.kiosk-fallback-home').length).toBe(0);
   });
 });

@@ -2,7 +2,7 @@
  * Setup screen: one scrolling screen with four steps (SPEC "Admin setup flow"):
  * Load -> Check -> Preview -> Configure -> Go live.
  */
-import type { Deck, Issue, KioskConfig, ButtonDef } from '../types';
+import type { Deck, Issue, KioskConfig, ButtonDef, Rect } from '../types';
 import { defaultConfig } from '../types';
 import { parsePptx, validateDeck } from '../pptx';
 import { SlideStage, renderThumbnail, rasterizeDeck, releaseThumbnails } from '../render';
@@ -32,6 +32,7 @@ const ISSUE_LABELS: Record<Issue['code'], string> = {
   no_home_link: 'No home link',
   too_large: 'File too large',
   small_button: 'Small button',
+  self_link: 'Self link',
 };
 
 export class SetupScreen {
@@ -300,20 +301,33 @@ export class SetupScreen {
     const overlay = this.previewStage.overlay;
     overlay.innerHTML = '';
     overlay.style.pointerEvents = 'none';
-    if (this.previewSlide !== 1) return;
-    for (const button of this.deck.buttons) {
-      const label = this.config.buttonLabels[button.id] ?? button.defaultLabel;
-      const box = h('div', { class: 'preview-btn-outline', style: { pointerEvents: 'auto' } }, [
-        h('span', { class: 'preview-btn-label' }, [label]),
-      ]);
-      box.style.position = 'absolute';
-      box.style.left = `${button.bounds.x}px`;
-      box.style.top = `${button.bounds.y}px`;
-      box.style.width = `${button.bounds.w}px`;
-      box.style.height = `${button.bounds.h}px`;
-      box.addEventListener('click', () => this.showPreviewSlide(button.targetSlide));
-      overlay.appendChild(box);
+    if (this.previewSlide === 1) {
+      for (const button of this.deck.buttons) {
+        const label = this.config.buttonLabels[button.id] ?? button.defaultLabel;
+        this.addPreviewOutline(overlay, button.bounds, label, button.targetSlide);
+      }
+      return;
     }
+    // Destination slides: outline any onward nav links the same way, so "Tapping a
+    // button in preview navigates as it will in kiosk mode" (SPEC) also covers chained
+    // slides, not just the home <-> destination pair.
+    for (const nav of this.deck.navLinks ?? []) {
+      if (nav.slide !== this.previewSlide) continue;
+      this.addPreviewOutline(overlay, nav.bounds, nav.label, nav.targetSlide);
+    }
+  }
+
+  private addPreviewOutline(overlay: HTMLElement, bounds: Rect, label: string, targetSlide: number): void {
+    const box = h('div', { class: 'preview-btn-outline', style: { pointerEvents: 'auto' } }, [
+      h('span', { class: 'preview-btn-label' }, [label]),
+    ]);
+    box.style.position = 'absolute';
+    box.style.left = `${bounds.x}px`;
+    box.style.top = `${bounds.y}px`;
+    box.style.width = `${bounds.w}px`;
+    box.style.height = `${bounds.h}px`;
+    box.addEventListener('click', () => this.showPreviewSlide(targetSlide));
+    overlay.appendChild(box);
   }
 
   private showPreviewSlide(index: number): void {

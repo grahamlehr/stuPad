@@ -34,12 +34,13 @@ const STYLE_ID = 'stupad-render';
 /** CSS shared by the live renderer and the rasterizer's foreignObject snapshot. */
 const STYLE_TEXT = `
 .sr-stage-scaler { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-.sr-slide-layer { position: absolute; inset: 0; }
 .sr-slide {
   position: relative;
   overflow: hidden;
   background: #000;
 }
+/* After .sr-slide so the stage's stacked layers aren't overridden back to position: relative. */
+.sr-slide.sr-slide-layer { position: absolute; left: 0; top: 0; }
 .sr-el { position: absolute; box-sizing: border-box; }
 .sr-el, .sr-el * {
   -webkit-user-select: none;
@@ -504,6 +505,16 @@ export interface SlideTransition {
   ms: number;
 }
 
+interface ActiveFade {
+  /** Outgoing layer, still fully opaque underneath; null on the very first show(). */
+  out: HTMLElement | null;
+  /** Incoming layer, fading 0 -> 1 on top. */
+  in: HTMLElement;
+  timer: ReturnType<typeof setTimeout>;
+  /** Resolves this fade's show() promise, whether it completes or is interrupted. */
+  done: () => void;
+}
+
 export class SlideStage {
   readonly overlay: HTMLElement;
 
@@ -515,12 +526,13 @@ export class SlideStage {
   private readonly urls = new Map<string, string>();
   private readonly ro: ResizeObserver | undefined;
 
-  private mounted: HTMLElement | null = null;
+  /** The layer currently fully visible (opacity 1, visibility visible) when no fade is running. */
+  private visible: HTMLElement | null = null;
   private _current = 1;
   private scale = 1;
   private offsetX = 0;
   private offsetY = 0;
-  private fadeTimer: ReturnType<typeof setTimeout> | undefined;
+  private fade: ActiveFade | undefined;
 
   constructor(container: HTMLElement, deck: Deck, opts: StageOpts = {}) {
     ensureStyles();
@@ -547,10 +559,18 @@ export class SlideStage {
 
     this.container.appendChild(this.scaler);
 
+    // Every slide layer is mounted once, up front, and never removed/re-appended: on
+    // iPadOS Safari re-appending a large subtree forces a re-layout/re-rasterise, and while
+    // its tiles are unpainted the document background shows through (a white flash). Layers
+    // not currently shown just sit hidden underneath.
     this.slideEls = deck.slides.map((slide) =>
       buildSlideEl(deck, slide, this.urls, !!opts.useRaster)
     );
-    this.slideEls.forEach((el) => (el.className += ' sr-slide-layer'));
+    this.slideEls.forEach((el) => {
+      el.className += ' sr-slide-layer';
+      this.hideLayer(el);
+      this.slideHost.appendChild(el);
+    });
 
     if (typeof ResizeObserver !== 'undefined') {
       this.ro = new ResizeObserver(() => this.fit());
@@ -565,52 +585,89 @@ export class SlideStage {
     return this._current;
   }
 
+  private hideLayer(el: HTMLElement): void {
+    el.style.transition = '';
+    el.style.visibility = 'hidden';
+    el.style.opacity = '0';
+    el.style.pointerEvents = 'none';
+    el.style.zIndex = '0';
+    el.style.willChange = '';
+    el.style.transform = '';
+  }
+
+  private showLayerInstant(el: HTMLElement): void {
+    el.style.transition = '';
+    el.style.visibility = 'visible';
+    el.style.opacity = '1';
+    el.style.pointerEvents = '';
+    el.style.zIndex = '0';
+    el.style.willChange = '';
+    el.style.transform = '';
+  }
+
+  /** Settles an in-flight fade immediately, leaving exactly its `in` layer visible. Used both
+   * when a fade completes naturally and when it's interrupted by another show() call. */
+  private settleFade(): void {
+    const f = this.fade;
+    if (!f) return;
+    clearTimeout(f.timer);
+    this.fade = undefined;
+    this.showLayerInstant(f.in);
+    if (f.out && f.out !== f.in) this.hideLayer(f.out);
+    this.visible = f.in;
+    f.done();
+  }
+
   show(index: number, transition: SlideTransition = { type: 'none', ms: 0 }): Promise<void> {
     const target = this.slideEls[index - 1];
     if (!target) return Promise.resolve();
-    const prev = this.mounted;
 
-    if (this.fadeTimer) {
-      clearTimeout(this.fadeTimer);
-      this.fadeTimer = undefined;
-    }
+    // Interrupted fade (e.g. rapid multi-slide navigation): settle it synchronously first,
+    // so we never leave a stale half-transparent layer behind.
+    this.settleFade();
+    this._current = index;
 
-    if (transition.type === 'none' || transition.ms <= 0) {
-      if (prev && prev !== target) prev.remove();
-      target.style.transition = '';
-      target.style.opacity = '1';
-      if (!target.isConnected) this.slideHost.appendChild(target);
-      this.mounted = target;
-      this._current = index;
+    if (target === this.visible) {
+      // Already showing this slide and nothing is fading: no-op.
       return Promise.resolve();
     }
 
-    // fade
-    if (!target.isConnected) {
-      target.style.transition = 'none';
-      target.style.opacity = '0';
-      this.slideHost.appendChild(target);
-      // force reflow so the browser registers opacity:0 before we animate to 1
-      void target.offsetWidth;
+    const prev = this.visible;
+
+    if (transition.type === 'none' || transition.ms <= 0) {
+      this.showLayerInstant(target);
+      if (prev) this.hideLayer(prev);
+      this.visible = target;
+      return Promise.resolve();
     }
+
+    // Fade: raise the incoming layer on top and crossfade it 0 -> 1 while the outgoing layer
+    // stays fully opaque underneath (never simultaneously semi-transparent), then hide the
+    // outgoing layer once the fade settles.
+    target.style.willChange = 'opacity';
+    target.style.transform = 'translateZ(0)';
+    target.style.visibility = 'visible';
+    target.style.zIndex = '1';
+    target.style.pointerEvents = '';
+    target.style.transition = 'none';
+    target.style.opacity = '0';
+    // Force a reflow so the browser registers opacity:0 before animating to 1.
+    void target.offsetWidth;
     target.style.transition = `opacity ${transition.ms}ms linear`;
     requestAnimationFrame(() => {
       target.style.opacity = '1';
     });
-    if (prev && prev !== target) {
-      prev.style.transition = `opacity ${transition.ms}ms linear`;
-      prev.style.opacity = '0';
+
+    if (prev) {
+      prev.style.willChange = 'opacity';
+      prev.style.transform = 'translateZ(0)';
+      prev.style.zIndex = '0';
+      // prev is already visibility:visible / opacity:1 from when it was shown.
     }
-    this.mounted = target;
-    this._current = index;
 
     return new Promise((resolve) => {
-      this.fadeTimer = setTimeout(() => {
-        if (prev && prev !== target) prev.remove();
-        target.style.transition = '';
-        this.fadeTimer = undefined;
-        resolve();
-      }, transition.ms);
+      const timer = setTimeout(() => this.settleFade(), transition.ms);
+      this.fade = { out: prev, in: target, timer, done: resolve };
     });
   }
 
@@ -643,7 +700,12 @@ export class SlideStage {
   }
 
   destroy(): void {
-    if (this.fadeTimer) clearTimeout(this.fadeTimer);
+    const f = this.fade;
+    this.fade = undefined;
+    if (f) {
+      clearTimeout(f.timer);
+      f.done();
+    }
     this.ro?.disconnect();
     for (const url of this.urls.values()) URL.revokeObjectURL(url);
     this.urls.clear();

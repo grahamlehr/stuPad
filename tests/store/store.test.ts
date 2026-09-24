@@ -33,6 +33,7 @@ function fakeDeck(): Deck {
     slides: [],
     buttons: [],
     homeLinks: [],
+  navLinks: [],
     media: {},
     fonts: [],
   };

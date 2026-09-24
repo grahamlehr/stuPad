@@ -1,7 +1,7 @@
 import type { ParseResult, Issue } from '../types';
 import { Pkg } from './zip';
 import { loadDeck } from './deck';
-import { detectButtons, detectHomeLinks } from './buttons';
+import { detectButtons, detectHomeLinks, detectNavLinks } from './buttons';
 import { validateDeckAndSize } from './validate';
 
 export { KNOWN_FONTS } from './fonts';
@@ -44,10 +44,15 @@ export async function parsePptx(input: Blob | ArrayBuffer, fileName: string): Pr
   deck.buttons = detectButtons(home.elements);
 
   const homeLinks = [];
+  const navLinks = [];
+  const navLinkIssues: Issue[] = [];
   for (const slide of deck.slides.slice(1)) {
     homeLinks.push(...detectHomeLinks(slide.index, slide.elements));
+    navLinks.push(...detectNavLinks(slide.index, slide.elements, navLinkIssues));
   }
   deck.homeLinks = homeLinks;
+  deck.navLinks = navLinks;
+  issues.push(...navLinkIssues);
 
   const validationIssues = validateDeckAndSize(deck, sizeBytes);
 

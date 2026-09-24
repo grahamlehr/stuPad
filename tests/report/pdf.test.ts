@@ -49,6 +49,7 @@ function makeDeck(buttonIds: string[]): Deck {
       bounds: { x: 0, y: 0, w: 100, h: 100 },
     })),
     homeLinks: [],
+  navLinks: [],
     media: {},
     fonts: [],
   };

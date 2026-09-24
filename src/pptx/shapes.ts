@@ -47,8 +47,17 @@ export function resolveLink(cNvPr: Element | null, ctx: ShapeParseCtx): SlideLin
     return { targetSlide };
   }
   if (action.includes('hlinkshowjump')) {
+    const slideCount = ctx.slidePathToIndex.size;
     if (action.includes('firstslide')) return { targetSlide: 1 };
-    // lastslide/nextslide/previousslide aren't meaningful as static button targets; ignore.
+    if (action.includes('lastslide')) return slideCount > 0 ? { targetSlide: slideCount } : undefined;
+    if (action.includes('nextslide')) {
+      const target = ctx.slideIndex + 1;
+      return target <= slideCount ? { targetSlide: target } : undefined; // last slide: no next slide to link to
+    }
+    if (action.includes('previousslide')) {
+      const target = ctx.slideIndex - 1;
+      return target >= 1 ? { targetSlide: target } : undefined; // first slide: no previous slide
+    }
     return undefined;
   }
   return undefined;

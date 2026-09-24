@@ -17,6 +17,12 @@ export interface ButtonStats {
   timeoutShare: number;
 }
 
+export interface SlideViewStat {
+  slide: number;
+  /** arrivals at this slide, from button_press.slide_to or slide_nav.slide_to */
+  views: number;
+}
+
 export interface ActivityBucket {
   /** ISO instant, local-offset (see util.isoLocal) */
   start: string;
@@ -49,6 +55,10 @@ export interface ReportStats {
   heatmap: number[][];
   /** yyyy-mm-dd label for each row of heatmap, same order */
   heatmapDays: string[];
+  /** arrivals per slide (button_press + slide_nav), ascending by slide number */
+  slideViews: SlideViewStat[];
+  /** total slide_nav events (onward navigation taps on destination slides) */
+  totalNavTaps: number;
 }
 
 function emptyMethodCounts(): Record<ReturnMethod, number> {
@@ -113,6 +123,8 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       isMultiDay: false,
       heatmap: [],
       heatmapDays: [],
+      slideViews: [],
+      totalNavTaps: 0,
     };
   }
 
@@ -153,6 +165,8 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
   let missTaps = 0;
   let dwellSumAll = 0;
   let dwellCountAll = 0;
+  let totalNavTaps = 0;
+  const slideViewCounts = new Map<number, number>();
 
   // open visits: visit_id -> { buttonId, ts }
   const openVisits = new Map<string, { buttonId: string; ts: string }>();
@@ -190,6 +204,9 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       ensure(id);
       totalPresses += 1;
       presses.set(id, (presses.get(id) ?? 0) + 1);
+      if (ev.slide_to !== undefined) {
+        slideViewCounts.set(ev.slide_to, (slideViewCounts.get(ev.slide_to) ?? 0) + 1);
+      }
       if (ev.visit_id) {
         openVisits.set(ev.visit_id, { buttonId: id, ts: ev.ts });
       }
@@ -239,6 +256,11 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       }
     } else if (ev.event === 'miss_tap') {
       missTaps += 1;
+    } else if (ev.event === 'slide_nav') {
+      totalNavTaps += 1;
+      if (ev.slide_to !== undefined) {
+        slideViewCounts.set(ev.slide_to, (slideViewCounts.get(ev.slide_to) ?? 0) + 1);
+      }
     }
   }
 
@@ -284,6 +306,10 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
 
   const isMultiDay = dayKeysSeen.size > 1;
 
+  const slideViews: SlideViewStat[] = Array.from(slideViewCounts.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([slide, views]) => ({ slide, views }));
+
   return {
     sessionId,
     firstTs,
@@ -299,5 +325,7 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
     isMultiDay,
     heatmap: heatmapRows,
     heatmapDays: heatmapDayOrder,
+    slideViews,
+    totalNavTaps,
   };
 }

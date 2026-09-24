@@ -14,7 +14,7 @@ Goals for v1:
 - Log every interaction with a timestamp to on-device storage, surviving app restarts.
 - Let the admin exit via a secret tap sequence and export a CSV log and a PDF summary.
 
-Out of scope for v1: multi-level branching, video and animation playback, syncing logs across multiple iPads, and any server-side component after setup.
+Out of scope for v1: video and animation playback, syncing logs across multiple iPads, and any server-side component after setup. Destination slides may link onward to further slides (see "PowerPoint template rules" and "Kiosk mode behaviour" below); a slide reachable only through such a chain still needs a way back to Home, which the kiosk provides as a fallback if the deck doesn't.
 
 ## Users and roles
 
@@ -56,8 +56,10 @@ Buttons are ordinary shapes on slide 1 with PowerPoint's own "Link to: Slide N" 
 1. Slide 1 is the home slide and must contain at least 2 button shapes.
 2. Each button links to a later slide (Insert > Link > Place in This Document > Slide N). Stored in the XML as a `ppaction://hlinksldjump` click action.
 3. Each destination slide may contain a shape linked back to slide 1, rendered as a "Home" button.
-4. Slides not linked from slide 1 are ignored (flagged as a warning, not an error).
-5. Two buttons may point to the same slide; they are still logged separately.
+4. A destination slide may also contain shapes linking onward to a further slide — a "Next", "Back", or similarly named shape — so a deck isn't limited to a flat Home <-> Destination pair. These may be an explicit "Link to: Slide N", or PowerPoint's "Next Slide" / "Previous Slide" / "First Slide" / "Last Slide" actions (resolved relative to the shape's own slide, and clamped to the deck — a "Next Slide" link on the last slide simply has no target). A slide reached only through such a chain is still "linked" for validation purposes, but is still flagged with a warning if it has no way back to slide 1.
+5. A shape that links to its own slide is an authoring mistake, not a nav link: it is flagged as a warning and otherwise ignored, rather than crashing or creating a self-loop.
+6. Slides not reachable from slide 1 (by a home-slide button, optionally followed by a chain of nav links) are ignored (flagged as a warning, not an error).
+7. Two buttons may point to the same slide; they are still logged separately.
 
 **Button naming.** The report uses the shape's name from the Selection Pane (e.g. `BTN_Sustainability`). If unnamed, the app uses the shape's text; if neither exists, "Button 1", "Button 2" in reading order. The admin can rename labels in setup.
 
@@ -117,12 +119,13 @@ Settings and the parsed deck are saved to IndexedDB, so reopening the app resume
 
 ## Kiosk mode behaviour
 
-Kiosk mode is a two-state loop: Home and Destination, with every transition logged.
+Kiosk mode is a Home <-> Destination loop, but a destination slide can also navigate onward to a further destination slide (a "Next"/"Back" nav link — see "PowerPoint template rules"); every transition, including onward nav, is logged.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Home
     Home --> Destination: button tap
+    Destination --> Destination: nav link tap
     Destination --> Home: Home button / tap
     Destination --> Home: timeout
     Home --> Admin: secret sequence
@@ -133,7 +136,9 @@ stateDiagram-v2
 
 - Full-screen, no browser chrome, no visible UI other than the slide and its buttons.
 - Only detected button areas respond on the home slide; taps elsewhere are logged as "miss" taps but do nothing.
-- The timeout timer starts when a destination slide appears and resets on any tap on that slide.
+- On a destination slide, a tap is checked against the Home link first, then any nav links on that slide; a nav link tap logs `slide_nav` and moves to the target slide without leaving destination mode.
+- The timeout timer starts when a destination slide appears and resets on any tap on that slide, including a nav link tap that moves to a further slide.
+- If a destination slide has no shape linking back to slide 1 (whether it's a direct destination or reached through a chain of nav links) and the Home button return method is enabled, the kiosk shows a discreet fallback Home button so no slide is a dead end.
 - Repeat taps within the debounce window are ignored and not logged as presses.
 - Pinch-zoom, text selection, long-press menus, pull-to-refresh and double-tap zoom are disabled.
 - The screen is kept awake with the Screen Wake Lock API; if unavailable, the admin is told to set Auto-Lock to Never.
@@ -157,6 +162,7 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | --- | --- |
 | `kiosk_start` / `kiosk_stop` | Admin starts or exits kiosk mode |
 | `button_press` | A home-slide button is tapped |
+| `slide_nav` | A destination-slide shape links onward to a further slide ("Next"/"Back") is tapped |
 | `return_home` | Destination slide closes; `method` = `home_button`, `tap` or `timeout` |
 | `miss_tap` | Tap on the home slide outside any button |
 | `app_resume` | App relaunches or returns to foreground in kiosk mode |
@@ -171,14 +177,14 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | `session_id` | UUID, one per kiosk run | 7f3c… |
 | `visit_id` | UUID, one per button press to return | a91e… |
 | `event` | enum, as above | button\_press |
-| `button_id` | shape id from the PPTX | 4 |
-| `button_label` | text | Sustainability |
-| `slide_from` / `slide_to` | integer | 1 / 3 |
+| `button_id` | shape id from the PPTX; on `slide_nav`, the id of the button that started the visit | 4 |
+| `button_label` | text; on `slide_nav`, the label of the button that started the visit | Sustainability |
+| `slide_from` / `slide_to` | integer; on `slide_nav`, the slide being left and the slide being entered | 1 / 3 |
 | `method` | enum, return events only | timeout |
-| `dwell_ms` | integer, return events only | 18420 |
+| `dwell_ms` | integer; on `return_home`, time for the whole visit; on `slide_nav`, time spent on just the slide being left | 18420 |
 | `x`, `y` | tap position as % of slide, miss taps only | 12.5, 88.0 |
 
-`dwell_ms` on each return gives time spent per destination, which is the most useful engagement measure after raw press counts.
+`dwell_ms` on each return gives time spent per destination, which is the most useful engagement measure after raw press counts. `slide_nav` events let a report break that down further into time spent per slide within a multi-slide visit, and count arrivals at each slide.
 
 Logs persist until the admin explicitly clears them after export. Clearing requires a confirmation and is itself logged.
 
@@ -204,7 +210,7 @@ id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,metho
 
 | Page | Content |
 | --- | --- |
-| 1. Summary | Session name, date/time range, total presses, total visits, average dwell, thumbnail of home slide |
+| 1. Summary | Session name, date/time range, total presses, total visits, average dwell, thumbnail of home slide; a compact "Slide views" table (arrivals per slide) when the deck has any onward nav taps |
 | 2. Button share | Pie or donut of presses by button with counts and %; horizontal bar of average dwell per button |
 | 3. Activity over time | Stacked bar chart of presses per interval (15 min default, auto-scaled to the range), one colour per button |
 | 4. Return behaviour | Split of returns by Home button, tap and timeout; share of visits ending by timeout per button |
