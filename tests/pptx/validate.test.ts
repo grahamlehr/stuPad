@@ -51,6 +51,7 @@ describe('validateDeck: matches parsePptx deck-level issues', () => {
       homeLinks: [{ slide: 2, id: 'h1', bounds: { x: 0, y: 0, w: 100, h: 100 } }],
       // Slide 2 has a Next link to slide 3, but slide 3 has no home link back.
       navLinks: [{ slide: 2, id: 'n1', shapeName: 'BTN_Next', label: 'Next', targetSlide: 3, bounds: { x: 100, y: 100, w: 100, h: 100 } }],
+      backLinks: [],
       media: {},
       fonts: [],
     };
@@ -73,6 +74,7 @@ describe('validateDeck: matches parsePptx deck-level issues', () => {
       buttons: [],
       homeLinks: [],
       navLinks: [],
+      backLinks: [],
       media: {},
       fonts: [],
     };

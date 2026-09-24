@@ -97,6 +97,7 @@ export function deck(overrides: Partial<Deck> = {}): Deck {
     buttons: overrides.buttons ?? [],
     homeLinks: overrides.homeLinks ?? [],
     navLinks: overrides.navLinks ?? [],
+    backLinks: overrides.backLinks ?? [],
     media: overrides.media ?? {},
     fonts: overrides.fonts ?? [],
     ...overrides,

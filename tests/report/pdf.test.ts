@@ -50,6 +50,7 @@ function makeDeck(buttonIds: string[]): Deck {
     })),
     homeLinks: [],
   navLinks: [],
+  backLinks: [],
     media: {},
     fonts: [],
   };

@@ -43,6 +43,8 @@ export class SetupScreen {
   private parsing = false;
   private fileInfo: { name: string; size: number } | undefined;
   private previewSlide = 1;
+  /** Destination slides visited in the preview since leaving slide 1, for back links. */
+  private previewPath: number[] = [];
   private previewStage: SlideStage | undefined;
   private goLiveBusy = false;
 
@@ -154,6 +156,7 @@ export class SetupScreen {
     this.deck = result.deck;
     this.issues = result.issues;
     this.previewSlide = 1;
+    this.previewPath = [];
     if (this.deck) {
       this.config = { ...defaultConfig(file.name), buttonLabels: {} };
       this.mountPreview();
@@ -304,7 +307,7 @@ export class SetupScreen {
     if (this.previewSlide === 1) {
       for (const button of this.deck.buttons) {
         const label = this.config.buttonLabels[button.id] ?? button.defaultLabel;
-        this.addPreviewOutline(overlay, button.bounds, label, button.targetSlide);
+        this.addPreviewOutline(overlay, button.bounds, label, () => this.showPreviewSlide(button.targetSlide));
       }
       return;
     }
@@ -313,11 +316,22 @@ export class SetupScreen {
     // slides, not just the home <-> destination pair.
     for (const nav of this.deck.navLinks ?? []) {
       if (nav.slide !== this.previewSlide) continue;
-      this.addPreviewOutline(overlay, nav.bounds, nav.label, nav.targetSlide);
+      this.addPreviewOutline(overlay, nav.bounds, nav.label, () => this.showPreviewSlide(nav.targetSlide));
+    }
+    for (const back of this.deck.backLinks ?? []) {
+      if (back.slide !== this.previewSlide) continue;
+      this.addPreviewOutline(overlay, back.bounds, back.label, () => this.previewGoBack());
     }
   }
 
-  private addPreviewOutline(overlay: HTMLElement, bounds: Rect, label: string, targetSlide: number): void {
+  /** Mirrors the kiosk's "Last Slide Viewed": previous slide of this preview visit, else Home. */
+  private previewGoBack(): void {
+    this.previewPath.pop();
+    const target = this.previewPath[this.previewPath.length - 1] ?? 1;
+    this.showPreviewSlide(target, false);
+  }
+
+  private addPreviewOutline(overlay: HTMLElement, bounds: Rect, label: string, onTap: () => void): void {
     const box = h('div', { class: 'preview-btn-outline', style: { pointerEvents: 'auto' } }, [
       h('span', { class: 'preview-btn-label' }, [label]),
     ]);
@@ -326,11 +340,13 @@ export class SetupScreen {
     box.style.top = `${bounds.y}px`;
     box.style.width = `${bounds.w}px`;
     box.style.height = `${bounds.h}px`;
-    box.addEventListener('click', () => this.showPreviewSlide(targetSlide));
+    box.addEventListener('click', onTap);
     overlay.appendChild(box);
   }
 
-  private showPreviewSlide(index: number): void {
+  private showPreviewSlide(index: number, record = true): void {
+    if (index === 1) this.previewPath = [];
+    else if (record) this.previewPath.push(index);
     this.previewSlide = index;
     void this.previewStage?.show(index, { type: 'none', ms: 0 });
     this.drawPreviewOverlay();

@@ -49,6 +49,8 @@ export function resolveLink(cNvPr: Element | null, ctx: ShapeParseCtx): SlideLin
   if (action.includes('hlinkshowjump')) {
     const slideCount = ctx.slidePathToIndex.size;
     if (action.includes('firstslide')) return { targetSlide: 1 };
+    // "Last Slide Viewed": checked before 'lastslide', which is a substring of it.
+    if (action.includes('lastslideviewed')) return { targetSlide: 0, back: true };
     if (action.includes('lastslide')) return slideCount > 0 ? { targetSlide: slideCount } : undefined;
     if (action.includes('nextslide')) {
       const target = ctx.slideIndex + 1;

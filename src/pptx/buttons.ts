@@ -1,4 +1,4 @@
-import type { ButtonDef, HomeLinkDef, NavLinkDef, SlideElement, SlideLink, Rect, Issue } from '../types';
+import type { BackLinkDef, ButtonDef, HomeLinkDef, NavLinkDef, SlideElement, SlideLink, Rect, Issue } from '../types';
 
 const DEFAULT_NAME_RE = /^(rectangle|oval|textbox|text box|group|rounded rectangle|picture|straight connector|elbow connector|freeform|shape|line|isoceles triangle|arrow|chevron|speech bubble|title|subtitle)\s*\d*$/i;
 const GOOGLE_SHAPE_RE = /^google shape;/i;
@@ -65,7 +65,7 @@ export function detectButtons(homeElements: SlideElement[]): ButtonDef[] {
   for (const el of homeElements) {
     if (el.hidden) continue;
     const link = findLink(el);
-    if (link && link.targetSlide > 1) raw.push({ el, link });
+    if (link && !link.back && link.targetSlide > 1) raw.push({ el, link });
   }
   raw.sort((a, b) => readingOrder({ bounds: boundsOf(a.el) }, { bounds: boundsOf(b.el) }));
 
@@ -111,7 +111,7 @@ export function detectNavLinks(slideIndex: number, elements: SlideElement[], iss
   for (const el of elements) {
     if (el.hidden) continue;
     const link = findLink(el);
-    if (!link) continue;
+    if (!link || link.back) continue; // a BackLinkDef, handled separately
     if (link.targetSlide === slideIndex) {
       issues.push({
         severity: 'warning',
@@ -139,6 +139,23 @@ export function detectNavLinks(slideIndex: number, elements: SlideElement[], iss
       targetSlide: link.targetSlide,
       bounds: boundsOf(el),
     });
+  }
+  return out;
+}
+
+/** Detect "Last Slide Viewed" shapes on a non-home slide (see BackLinkDef). */
+export function detectBackLinks(slideIndex: number, elements: SlideElement[]): BackLinkDef[] {
+  const out: BackLinkDef[] = [];
+  let n = 0;
+  const raw = elements.filter((el) => !el.hidden && findLink(el)?.back);
+  raw.sort((a, b) => readingOrder({ bounds: boundsOf(a) }, { bounds: boundsOf(b) }));
+
+  for (const el of raw) {
+    n++;
+    const name = el.name ?? '';
+    const text = elementText(el);
+    const label = !looksLikeDefaultName(name) && name.trim() ? prettyName(name) : text ? text : `Back ${n}`;
+    out.push({ slide: slideIndex, id: el.id, shapeName: name, label, bounds: boundsOf(el) });
   }
   return out;
 }

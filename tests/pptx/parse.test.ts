@@ -164,6 +164,18 @@ describe('parsePptx: multi-slide.pptx (nav link chains)', () => {
     expect(errors).toEqual([]);
   });
 
+  it('resolves a "Last Slide Viewed" action as a back link, not as a jump to the last slide', async () => {
+    const data = await loadFixture('multi-slide.pptx');
+    const result = await parsePptx(data, 'multi-slide.pptx');
+    const deck = result.deck!;
+    expect(deck.backLinks).toEqual([
+      expect.objectContaining({ slide: 5, shapeName: 'BTN_Back', label: 'Back' }),
+    ]);
+    // lastslideviewed contains "lastslide": it must not resolve to slide 5 (a self link).
+    expect(deck.navLinks.some((n) => n.slide === 5)).toBe(false);
+    expect(result.issues.some((i) => i.slide === 5)).toBe(false); // no self_link, no_home_link or unlinked_slide
+  });
+
   it('every non-home slide is reachable (no unlinked_slide warnings)', async () => {
     const data = await loadFixture('multi-slide.pptx');
     const result = await parsePptx(data, 'multi-slide.pptx');

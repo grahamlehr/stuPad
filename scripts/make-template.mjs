@@ -11,7 +11,8 @@
  *   multi-slide.pptx     - home (2 buttons) -> destination slides that link onward:
  *                          an explicit slide-link "Next", a `nextslide`-action "Next"
  *                          (patched in via JSZip; pptxgenjs can't emit hlinkshowjump),
- *                          and a self-link (authoring mistake -> self_link warning)
+ *                          a self-link (authoring mistake -> self_link warning), and a
+ *                          Terms slide whose Back shape uses `lastslideviewed`
  *
  * Run: npm run template
  */
@@ -276,6 +277,8 @@ async function buildWithImageDeck() {
  *            ppaction://hlinkshowjump?jump=nextslide, + Home
  *   Slide 4: "BTN_Self" links to its own slide (authoring mistake -> self_link warning,
  *            ignored rather than crashing), + Home
+ *   Slide 5: Terms, linked from slides 2 and 3; its only way out is a "Back" shape with
+ *            PowerPoint's "Last Slide Viewed" action (lastslideviewed, injected below)
  */
 function buildMultiSlideDeck() {
   const pptx = new PptxGenJS();
@@ -325,6 +328,15 @@ function buildMultiSlideDeck() {
     hyperlink: { slide: 1 },
   });
 
+  s2.addText('Terms', {
+    x: 4.6, y: 6.5, w: 1.8, h: 0.6,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.15,
+    fill: { color: '8A5D2E' }, fontFace: FONT, fontSize: 14, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'BTN_Terms',
+    hyperlink: { slide: 5 },
+  });
+
   // Slide 3: "Next" shape with no hyperlink yet -> injectNextSlideAction() below gives it
   // ppaction://hlinkshowjump?jump=nextslide, resolving to slide 4 at parse time.
   const s3 = pptx.addSlide();
@@ -344,6 +356,15 @@ function buildMultiSlideDeck() {
     align: 'center', valign: 'middle',
     objectName: 'BTN_Home',
     hyperlink: { slide: 1 },
+  });
+
+  s3.addText('Terms', {
+    x: 4.6, y: 6.5, w: 1.8, h: 0.6,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.15,
+    fill: { color: '8A5D2E' }, fontFace: FONT, fontSize: 14, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'BTN_Terms',
+    hyperlink: { slide: 5 },
   });
 
   // Slide 4: BTN_Self links to its own slide (an authoring mistake we must not crash on).
@@ -367,6 +388,18 @@ function buildMultiSlideDeck() {
     hyperlink: { slide: 1 },
   });
 
+  // Slide 5: Terms. BTN_Back gets ppaction://hlinkshowjump?jump=lastslideviewed below.
+  const s5 = pptx.addSlide();
+  s5.background = { color: LIGHT };
+  s5.addText('Terms and conditions', { x: 0.6, y: 0.5, w: 12, h: 1, fontFace: FONT, fontSize: 28, bold: true, color: NAVY });
+  s5.addText('Back', {
+    x: 0.6, y: 6.5, w: 1.8, h: 0.6,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.15,
+    fill: { color: NAVY }, fontFace: FONT, fontSize: 14, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'BTN_Back',
+  });
+
   return pptx;
 }
 
@@ -374,7 +407,7 @@ function buildMultiSlideDeck() {
  * Post-process a slide's XML to give a named shape a `ppaction://hlinkshowjump` click
  * action instead of an explicit slide link — pptxgenjs's `hyperlink` option only emits
  * explicit `ppaction://hlinksldjump` links, so shapes meant to exercise `nextslide` /
- * `previousslide` / `firstslide` / `lastslide` are added with no hyperlink and patched
+ * `previousslide` / `firstslide` / `lastslide` / `lastslideviewed` are added with no hyperlink and patched
  * here. Unlike hlinksldjump, this action needs no relationship id.
  */
 async function injectShowJumpAction(pptxPath, slideFile, shapeName, jump) {
@@ -543,6 +576,8 @@ async function main() {
   await writePptx(multiSlide, multiSlidePath);
   await injectShowJumpAction(multiSlidePath, 'slide3.xml', 'BTN_NextAction', 'nextslide');
   await assertShowJumpAction(multiSlidePath, 'slide3.xml', 'nextslide');
+  await injectShowJumpAction(multiSlidePath, 'slide5.xml', 'BTN_Back', 'lastslideviewed');
+  await assertShowJumpAction(multiSlidePath, 'slide5.xml', 'lastslideviewed');
   console.log(`Wrote ${multiSlidePath}`);
 
   console.log('Done.');
