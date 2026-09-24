@@ -51,9 +51,9 @@ const SECRET_PATTERNS: Record<SecretPattern, Corner[]> = {
 };
 
 /**
- * Tracks progress through a fixed corner-tap pattern. Callers should only `feed()` taps
- * already known to land in a corner region (see `cornerOf`); every such tap is consumed
- * by the detector and must not also be treated as a button press or home return.
+ * Tracks progress through a fixed corner-tap pattern. Taps outside the corner regions
+ * (see `cornerOf`) are ignored. `step()` tells the caller whether to consume the tap:
+ * only taps that continue or complete an attempt in progress are consumed.
  *
  * Rules: a tap matching the next expected corner advances the attempt. A tap in a
  * *different* corner restarts the attempt — starting fresh at step 1 if that wrong
@@ -82,8 +82,18 @@ export class SecretSequenceDetector {
    * tap completed the sequence (the detector resets itself in that case). A tap that
    * isn't actually within a corner region is ignored (returns false, no state change). */
   feed(xPct: number, yPct: number, t: number): boolean {
+    return this.step(xPct, yPct, t) === 'complete';
+  }
+
+  /**
+   * Like `feed`, but also says whether the tap *continued* an attempt already in
+   * progress (step 2 onwards). The kiosk consumes 'continued' and 'complete' taps and
+   * handles 'none' taps (including a sequence's first step) normally, so buttons and
+   * Home links that sit in a corner still work.
+   */
+  step(xPct: number, yPct: number, t: number): 'none' | 'continued' | 'complete' {
     const corner = cornerOf(xPct, yPct, this.cornerFraction);
-    if (!corner) return false;
+    if (!corner) return 'none';
 
     if (this.firstTapAt !== null && t - this.firstTapAt > this.windowMs) {
       this.reset();
@@ -91,13 +101,14 @@ export class SecretSequenceDetector {
 
     const expected = this.pattern[this.progress];
     if (corner === expected) {
+      const continuing = this.progress > 0;
       if (this.progress === 0) this.firstTapAt = t;
       this.progress += 1;
       if (this.progress >= this.pattern.length) {
         this.reset();
-        return true;
+        return 'complete';
       }
-      return false;
+      return continuing ? 'continued' : 'none';
     }
 
     if (corner === this.pattern[0]) {
@@ -107,7 +118,7 @@ export class SecretSequenceDetector {
       this.progress = 0;
       this.firstTapAt = null;
     }
-    return false;
+    return 'none';
   }
 
   reset(): void {
@@ -301,21 +312,18 @@ export class KioskController {
     const at = this.stage.toSlide(clientX, clientY);
     if (!at) return; // letterbox / outside the slide entirely: not logged
 
-    const corner = cornerOf(at.xPct, at.yPct, CORNER_FRACTION);
-    if (corner) {
-      const completed = this.detector.feed(at.xPct, at.yPct, now);
-      if (completed) {
-        this.onAdminRequested();
-        return;
-      }
-      // Corner taps are always consumed by the secret detector: never a button press
-      // or home return, whether or not they advanced/restarted an attempt.
-      if (this.mode === 'home') {
-        this.log({ event: 'miss_tap', slide_from: 1, x: round1(at.xPct), y: round1(at.yPct) });
-      } else {
-        // Any tap on the destination slide resets the idle timeout.
-        this.resetDestinationTimer();
-      }
+    // The secret sequence is checked first. Taps that continue or complete an attempt in
+    // progress are consumed (they never press a button or return home). A sequence's
+    // first corner tap is handled normally, so buttons and Home links placed in a
+    // corner still work; the cost is that starting the exit sequence on a slide with a
+    // top-left button also presses that button once.
+    const secret = this.detector.step(at.xPct, at.yPct, now);
+    if (secret === 'complete') {
+      this.onAdminRequested();
+      return;
+    }
+    if (secret === 'continued') {
+      if (this.mode === 'destination') this.resetDestinationTimer();
       return;
     }
 

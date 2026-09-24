@@ -170,33 +170,56 @@ describe('KioskController', () => {
     expect(logs).toHaveLength(2);
   });
 
-  it('corner taps never trigger buttons, even when a button sits under a corner', async () => {
+  it('a corner tap that continues a secret sequence never triggers a button under it', async () => {
     const deck = fakeDeck();
-    // Put a button right under the TL corner region.
+    // Put a button under the TR corner: step 2 of corners_cw.
     deck.buttons.push({
       id: 'corner-btn',
       shapeName: 'BTN_Corner',
       text: 'Corner',
       defaultLabel: 'Corner',
       targetSlide: 3,
-      bounds: { x: 0, y: 0, w: 100, h: 100 },
+      bounds: { x: 1800, y: 0, w: 120, h: 120 },
     });
     controller = new KioskController({
       root,
       deck,
-      config: fakeConfig(),
+      config: fakeConfig({ secretPattern: 'corners_cw' }),
       sessionId: 'sess-1',
       log: (e) => logs.push(e),
       onAdminRequested,
     });
     await controller.start();
+    logs.length = 0;
 
-    tap(root, TL.x, TL.y);
+    tap(root, TL.x, TL.y); // step 1: handled normally (a miss here)
+    vi.advanceTimersByTime(150);
+    tap(root, TR.x, TR.y); // step 2: consumed by the detector
 
-    expect(logs).toHaveLength(1);
-    expect(logs[0].event).toBe('miss_tap'); // consumed by the detector, not a button press
-    expect(logs.some((l) => l.event === 'button_press')).toBe(false);
+    expect(logs.map((l) => l.event)).toEqual(['miss_tap']);
     expect(onAdminRequested).not.toHaveBeenCalled();
+  });
+
+  it('a corner tap that does not continue a sequence is handled normally (e.g. a Home link in a corner)', async () => {
+    const deck = fakeDeck();
+    deck.homeLinks.push({ slide: 2, id: 'corner-home', bounds: { x: 0, y: 960, w: 200, h: 120 } });
+    controller = new KioskController({
+      root,
+      deck,
+      config: fakeConfig({ secretPattern: 'corners_cw' }),
+      sessionId: 'sess-1',
+      log: (e) => logs.push(e),
+      onAdminRequested,
+    });
+    await controller.start();
+    logs.length = 0;
+
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> destination slide 2
+    vi.advanceTimersByTime(150);
+    tap(root, BL.x, BL.y); // BL is not the first step of corners_cw
+
+    expect(logs.map((l) => l.event)).toEqual(['button_press', 'return_home']);
+    expect(logs[1]).toMatchObject({ method: 'home_button' });
   });
 
   it('secret sequence: completing the corner pattern calls onAdminRequested with no other handling', async () => {

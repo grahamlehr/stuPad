@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "preview", "runtimeExecutable": "npx", "runtimeArgs": ["vite", "preview", "--port", "4180", "--strictPort"], "env": { "BASE_PATH": "/stuPad/" }, "port": 4180 }
+  ]
+}

@@ -9,6 +9,12 @@ function looksLikeDefaultName(name: string): boolean {
   return DEFAULT_NAME_RE.test(trimmed) || GOOGLE_SHAPE_RE.test(trimmed);
 }
 
+/** "BTN_Sustainability" -> "Sustainability", "btn-our_people" -> "our people". The raw name stays in ButtonDef.shapeName. */
+export function prettyName(name: string): string {
+  const stripped = name.trim().replace(/^btn[\s_-]+/i, '').replace(/[_-]+/g, ' ').trim();
+  return stripped || name.trim();
+}
+
 function elementText(el: SlideElement): string {
   if (el.kind === 'shape' && el.text) {
     return el.text.paragraphs.map((p) => p.runs.map((r) => r.text).join('')).join(' ').trim();
@@ -67,7 +73,7 @@ export function detectButtons(homeElements: SlideElement[]): ButtonDef[] {
     n++;
     const name = el.name ?? '';
     const text = elementText(el);
-    const defaultLabel = !looksLikeDefaultName(name) && name.trim() ? name.trim() : text ? text : `Button ${n}`;
+    const defaultLabel = !looksLikeDefaultName(name) && name.trim() ? prettyName(name) : text ? text : `Button ${n}`;
     candidates.push({
       id: el.id,
       shapeName: name,

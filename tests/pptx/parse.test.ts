@@ -31,7 +31,7 @@ describe('parsePptx: good.pptx', () => {
     expect(deck.buttons.length).toBe(4);
     // Shapes are named (not PowerPoint defaults like "Rectangle 3"), so per SPEC the
     // shape name is used as the default label, not the shape's own text.
-    expect(deck.buttons.map((b) => b.defaultLabel)).toEqual(['BTN_Sustainability', 'BTN_Innovation', 'BTN_People', 'BTN_Contact']);
+    expect(deck.buttons.map((b) => b.defaultLabel)).toEqual(['Sustainability', 'Innovation', 'People', 'Contact']);
     expect(deck.buttons.map((b) => b.text)).toEqual(['Sustainability', 'Innovation', 'People', 'Contact']);
     expect(deck.buttons.map((b) => b.targetSlide)).toEqual([2, 3, 4, 5]);
     expect(deck.buttons.map((b) => b.shapeName)).toEqual(['BTN_Sustainability', 'BTN_Innovation', 'BTN_People', 'BTN_Contact']);
@@ -128,5 +128,26 @@ describe('parsePptx: unreadable file', () => {
     const result = await parsePptx(bad, 'bad.pptx');
     expect(result.deck).toBeUndefined();
     expect(result.issues.some((i) => i.code === 'unreadable_file')).toBe(true);
+  });
+});
+
+describe('prettyName', () => {
+  it('strips a BTN prefix and separators', async () => {
+    const { prettyName } = await import('../../src/pptx/buttons');
+    expect(prettyName('BTN_Sustainability')).toBe('Sustainability');
+    expect(prettyName('btn-our_people')).toBe('our people');
+    expect(prettyName('Visit Us')).toBe('Visit Us');
+    expect(prettyName('BTN_')).toBe('BTN_');
+  });
+});
+
+describe('template run links', () => {
+  it('has no underlined or run-level links on button captions', async () => {
+    const JSZip = (await import('jszip')).default;
+    const buf = await fs.readFile(path.resolve(__dirname, '../../public/template.pptx'));
+    const zip = await JSZip.loadAsync(buf);
+    const xml = await zip.file('ppt/slides/slide1.xml')!.async('string');
+    expect(xml).not.toMatch(/u="sng"/);
+    expect(xml.match(/<a:hlinkClick/g)?.length).toBe(4);
   });
 });

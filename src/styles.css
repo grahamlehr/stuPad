@@ -247,7 +247,8 @@ a {
 
 .thumb-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  /* thumbnails render at a fixed 160px wide (+2px border each side), so size cards to match */
+  grid-template-columns: repeat(auto-fill, 164px);
   gap: 12px;
   margin-top: 8px;
 }

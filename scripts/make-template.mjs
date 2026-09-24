@@ -216,8 +216,26 @@ async function buildWithImageDeck() {
 async function writePptx(pptx, filePath) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const buf = await pptx.write({ outputType: 'nodebuffer' });
-  await fs.writeFile(filePath, buf);
+  await fs.writeFile(filePath, await stripRunLinks(buf));
   return filePath;
+}
+
+/**
+ * pptxgenjs copies a shape's `hyperlink` onto every text run as well, with u="sng", so
+ * PowerPoint (and our renderer) underline button captions like web links. The shape-level
+ * hlinkClick is all a button needs, so drop the run-level links and their underline.
+ */
+async function stripRunLinks(buf) {
+  const zip = await JSZip.loadAsync(buf);
+  for (const name of Object.keys(zip.files).filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))) {
+    const xml = await zip.file(name).async('string');
+    const cleaned = xml.replace(/<a:rPr([^>]*)>([\s\S]*?)<\/a:rPr>/g, (m, attrs, body) => {
+      if (!body.includes('<a:hlinkClick')) return m;
+      return `<a:rPr${attrs.replace(/\su="sng"/, '')}>${body.replace(/<a:hlinkClick[\s\S]*?<\/a:hlinkClick>|<a:hlinkClick[^>]*\/>/g, '')}</a:rPr>`;
+    });
+    zip.file(name, cleaned);
+  }
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
 /** Confirm pptxgenjs actually emits ppaction://hlinksldjump for a slide hyperlink. */

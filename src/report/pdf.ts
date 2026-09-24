@@ -1,4 +1,5 @@
-import { jsPDF } from 'jspdf';
+// Type-only import: jsPDF (~400 kB) is loaded on demand in buildPdf so kiosk startup never parses it.
+import type { jsPDF } from 'jspdf';
 import type { Deck, KioskConfig, LogEvent } from '../types';
 import { computeStats, type ReportStats } from './stats';
 import { buttonColor } from './colors';
@@ -49,13 +50,13 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   return `data:${mime};base64,${base64}`;
 }
 
-/** Draws a chart at 2-3x device-pixel-ratio for crisp print output, returns a PNG data URL. */
+/** Draws a chart at 2x for crisp print output (~200 dpi at the placed sizes), returns a PNG data URL. */
 function renderChartImage<T>(
   draw: (ctx: CanvasRenderingContext2D | null, w: number, h: number, data: T) => void,
   data: T,
   cssW: number,
   cssH: number,
-  dpr = 3,
+  dpr = 2,
 ): string {
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(cssW * dpr);
@@ -76,7 +77,7 @@ function placeImage(
   wMm: number,
 ): number {
   const hMm = wMm * (cssH / cssW);
-  doc.addImage(dataUrl, 'PNG', x, y, wMm, hMm);
+  doc.addImage(dataUrl, 'PNG', x, y, wMm, hMm, undefined, 'FAST');
   return hMm;
 }
 
@@ -144,7 +145,9 @@ export async function buildPdf(
   const now = new Date();
   const generatedAt = formatTs(now.toISOString());
 
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const { jsPDF } = await import('jspdf');
+  // compress + 'FAST' image compression: without them jsPDF stores chart PNGs raw (tens of MB).
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
   const isEmpty = events.length === 0;
 
   // ---------------------------------------------------------------- page 1: Summary
@@ -180,7 +183,7 @@ export async function buildPdf(
       const y = MARGIN + 10;
       doc.setDrawColor(210, 210, 210);
       doc.rect(x - 1, y - 1, boxW + 2, boxH + 2);
-      doc.addImage(dataUrl, 'PNG', x, y, boxW, boxH);
+      doc.addImage(dataUrl, 'PNG', x, y, boxW, boxH, undefined, 'FAST');
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(9);
       doc.setTextColor(130, 130, 130);
