@@ -1,7 +1,11 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// BASE_PATH is set by the GitHub Pages workflow (e.g. /stuPad/); defaults to / for local dev and other hosts.
+const base = process.env.BASE_PATH ?? '/';
+
 export default defineConfig({
+  base,
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',
@@ -17,7 +21,8 @@ export default defineConfig({
         orientation: 'landscape',
         background_color: '#000000',
         theme_color: '#000000',
-        start_url: '.',
+        start_url: base,
+        scope: base,
         icons: [
           { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },

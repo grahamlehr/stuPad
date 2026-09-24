@@ -91,4 +91,4 @@ buttonColor(i: number): string    // consistent palette across all charts
 
 1. **Parallel modules** (A parser+template, B renderer, C store+kiosk, D reports).
 2. **Integration** (E): UI, main.ts, PWA, end-to-end check in a browser with the template deck.
-3. **Review**: code review pass, fix, push, deploy notes (Render static site: build `npm run build`, publish `dist`).
+3. **Review**: code review pass, fix, push. Deployment is GitHub Pages via `.github/workflows/deploy-pages.yml` (served under `/stuPad/`; use `import.meta.env.BASE_URL` for asset URLs).
