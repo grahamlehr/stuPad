@@ -1,0 +1,537 @@
+/* stuPad: admin UI (Setup/Admin/PIN pad) + kiosk chrome reset.
+   Light theme with a dark-mode variant; large touch targets (>= 44pt) throughout. */
+
+:root {
+  --bg: #f5f3ee;
+  --surface: #ffffff;
+  --text: #1b2a4a;
+  --text-muted: #5b6472;
+  --border: #dcd8cf;
+  --navy: #1b2a4a;
+  --accent: #2e7d6b;
+  --accent-contrast: #ffffff;
+  --danger: #b3261e;
+  --danger-contrast: #ffffff;
+  --warning-bg: #fff3cd;
+  --warning-text: #7a5b00;
+  --error-bg: #fbe4e2;
+  --error-text: #8a231b;
+  --ok-text: #1c6e46;
+  --radius: 12px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14181f;
+    --surface: #1e232c;
+    --text: #eef1f6;
+    --text-muted: #a3adbb;
+    --border: #333a46;
+    --warning-bg: #4a3a00;
+    --warning-text: #ffdd7a;
+    --error-bg: #4a201d;
+    --error-text: #ff9d94;
+    --ok-text: #6fd39a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+
+#app {
+  min-height: 100dvh;
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+  font-size: 16px;
+}
+
+a {
+  color: var(--accent);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------------ buttons */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 10px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--danger-contrast);
+}
+
+.btn-ghost {
+  background: transparent;
+}
+
+.btn-big {
+  min-height: 56px;
+  padding: 14px 28px;
+  font-size: 18px;
+}
+
+/* ------------------------------------------------------------------ setup */
+
+.setup-screen {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 20px 80px;
+}
+
+.setup-header h1 {
+  margin: 0 0 4px;
+}
+
+.setup-sub {
+  color: var(--text-muted);
+  margin-top: 0;
+}
+
+.setup-step {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.setup-step--disabled {
+  opacity: 0.55;
+}
+
+.setup-step h2 {
+  margin-top: 0;
+}
+
+.load-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.sr-only-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.load-status {
+  color: var(--text-muted);
+}
+
+.issue-group {
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-top: 12px;
+}
+
+.issue-group--error {
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.issue-group--warning {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.issue-group h3 {
+  margin-top: 0;
+}
+
+.issue-ok {
+  color: var(--ok-text);
+  font-weight: 600;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.checkbox-row input {
+  width: 22px;
+  height: 22px;
+}
+
+.preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.preview-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.preview-btn-outline {
+  border: 3px solid #ffce45;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+}
+
+.preview-btn-label {
+  background: #ffce45;
+  color: #1b2a4a;
+  font-size: 22px;
+  font-weight: 700;
+  padding: 2px 8px;
+}
+
+.thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.thumb {
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.thumb--unlinked {
+  border-color: var(--danger);
+}
+
+.thumb-label {
+  display: block;
+  padding: 4px;
+}
+
+.field-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 16px;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.field-row input[type='text'],
+.field-row input[type='password'],
+.field-row input[type='number'],
+.field-row input[type='datetime-local'],
+select,
+input[type='text'],
+input[type='number'] {
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.storage-info {
+  margin-top: 16px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* ------------------------------------------------------------------ modal */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.modal-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 24px;
+  max-width: 520px;
+  width: 100%;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.checklist {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.warning-text {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  padding: 10px 14px;
+  border-radius: 8px;
+}
+
+/* ------------------------------------------------------------------ admin */
+
+.admin-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  overflow: auto;
+  z-index: 500;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.admin-screen {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.admin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.admin-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.admin-stats,
+.admin-export,
+.admin-clear {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-top: 20px;
+}
+
+.stat-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.stat-tile {
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 12px 18px;
+  min-width: 100px;
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.stat-label {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.export-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.export-preview {
+  margin: 8px 0;
+}
+
+.clear-confirm-input {
+  min-height: 44px;
+}
+
+.admin-footer {
+  margin-top: 24px;
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ pin pad */
+
+.pinpad-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.pinpad-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 320px;
+  text-align: center;
+}
+
+.pinpad-title {
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.pinpad-dots {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.pinpad-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--text-muted);
+}
+
+.pinpad-dot--filled {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.pinpad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.pinpad-key {
+  min-height: 56px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.pinpad-spacer {
+  min-height: 56px;
+}
+
+.pinpad-cancel {
+  margin-top: 16px;
+  width: 100%;
+}
+
+@keyframes pinpad-shake {
+  10%,
+  90% { transform: translateX(-4px); }
+  20%,
+  80% { transform: translateX(6px); }
+  30%,
+  50%,
+  70% { transform: translateX(-8px); }
+  40%,
+  60% { transform: translateX(8px); }
+}
+
+.pinpad-shake .pinpad-card {
+  animation: pinpad-shake 400ms;
+}
+
+/* ------------------------------------------------------------------ kiosk */
+
+.kiosk-root {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  background: #000;
+  overscroll-behavior: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+  z-index: 1;
+}
