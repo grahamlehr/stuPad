@@ -2,6 +2,8 @@
 
 Sep 24, 2026 · @Graham Lehr
 
+This is the requirements document. For how the implementation works and where things live in the code, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Overview and goals
 
 An installable web app (PWA) turns a structured PowerPoint file into a self-running, touch-driven iPad kiosk that logs every interaction and produces CSV and PDF reports offline.
@@ -34,7 +36,7 @@ The app is a static PWA on iPadOS Safari, online once for install and setup, ful
 | Area | Decision | Why |
 | --- | --- | --- |
 | Target | iPadOS 17+, Safari, added to Home Screen, landscape only | Home Screen web apps get standalone display and persistent storage |
-| Hosting | Static files (e.g. Render static site); no backend | Nothing to run after setup |
+| Hosting | Static files, deployed to GitHub Pages under `/stuPad/` (any static host works); no backend | Nothing to run after setup |
 | Offline | Service worker precaches the app shell, fonts and all libraries on first load | iPad has no internet during the event |
 | File input | `<input type="file" accept=".pptx">` opening the Files app picker | A web app cannot read arbitrary file paths; the admin picks the file |
 | PPTX parsing | JSZip + XML parsing of `ppt/slides/*.xml` and relationships | .pptx is a zip of XML; structure is fully readable |
@@ -78,7 +80,7 @@ Buttons are ordinary shapes on slide 1 with PowerPoint's own "Link to: Slide N" 
 | Animations, transitions | No | Ignored; app uses its own fade |
 | Video, audio | No | Candidate for v2 |
 
-**Fonts.** Use fonts embedded in the file, a small set of approved web fonts bundled with the app, or iPad system fonts. Anything else falls back and is flagged at setup.
+**Fonts.** Use fonts embedded in the file, the web fonts bundled with the app (Inter, Lato, Montserrat, Open Sans, Roboto; Latin scripts), or iPad system fonts. Anything else falls back and is flagged at setup.
 
 **Slide size.** 16:9 (13.333 x 7.5 in). Other sizes are letterboxed.
 
@@ -86,15 +88,15 @@ The app should ship with a downloadable template .pptx that follows all these ru
 
 ## Admin setup flow
 
-Setup is one screen with four steps: load, check, configure, go live.
+Setup is one scrolling screen with five steps: load, check, preview, configure, go live.
 
 ```mermaid
 flowchart LR
-    A[Load .pptx<br/>from Files] --> B[Parse and<br/>validate]
+    A[Load .pptx<br/>from Files] --> B[Check<br/>errors and warnings]
     B -->|errors| A
     B --> C[Preview slides<br/>and buttons]
     C --> D[Configure<br/>settings]
-    D --> E[Start kiosk]
+    D --> E[Go live:<br/>checklist, start kiosk]
 ```
 
 Validation errors (fewer than 2 buttons, broken links, unreadable file) block go-live. Warnings (missing fonts, unsupported elements, unlinked slides) are shown but can be accepted.
@@ -192,7 +194,7 @@ Logs persist until the admin explicitly clears them after export. Clearing requi
 
 ## Exit and reporting (CSV and PDF)
 
-After the secret sequence (and PIN, if set) the admin lands on an admin panel with Resume, Export, Clear log and Setup.
+After the secret sequence (and PIN, if set) the admin lands on an admin panel with Resume, Export, Clear log and Setup. Three wrong PIN entries, or 30 s without input, return to the kiosk without granting access; each wrong entry is logged as `admin_unlock_fail`. Clearing the log requires typing `CLEAR`.
 
 **Getting files off the iPad.** Exports use the iOS share sheet (Web Share API with files), giving Save to Files, AirDrop and Mail. Plain browser downloads are unreliable in Home Screen web apps, so they are only a fallback.
 

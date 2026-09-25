@@ -48,6 +48,7 @@ vi.mock('../../src/render', () => {
         return s as unknown as MockSlideStage;
       }
     },
+    preloadDeckFonts: async () => {},
   };
 });
 

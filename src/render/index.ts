@@ -26,6 +26,9 @@ import type {
   Xfrm,
 } from '../types';
 import { SLIDE_W } from '../types';
+import { fontFaceCss, embeddedFontCss } from './fonts';
+
+export { preloadDeckFonts, BUNDLED_FONT_FAMILIES } from './fonts';
 
 // ------------------------------------------------------------------ styling
 
@@ -72,7 +75,7 @@ function ensureStyles(): void {
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement('style');
   style.id = STYLE_ID;
-  style.textContent = STYLE_TEXT;
+  style.textContent = `${STYLE_TEXT}\n${fontFaceCss()}`;
   document.head.appendChild(style);
 }
 
@@ -781,7 +784,8 @@ async function rasterizeSlideEl(
   const wrapper = document.createElement('div');
   wrapper.setAttribute('xmlns', xmlns);
   const styleEl = document.createElement('style');
-  styleEl.textContent = STYLE_TEXT;
+  // An SVG image can't load page fonts, so inline the ones this slide uses.
+  styleEl.textContent = `${STYLE_TEXT}\n${await embeddedFontCss(slideEl)}`;
   wrapper.appendChild(styleEl);
   wrapper.appendChild(slideEl);
 

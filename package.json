@@ -9,7 +9,8 @@
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "template": "node scripts/make-template.mjs"
+    "template": "node scripts/make-template.mjs",
+    "fonts": "node scripts/make-fonts.mjs"
   },
   "dependencies": {
     "idb": "^8.0.3",
