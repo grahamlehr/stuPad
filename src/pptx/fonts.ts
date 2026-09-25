@@ -39,6 +39,7 @@ export const KNOWN_FONTS: string[] = [
   'Roboto',
   'Open Sans',
   'Lato',
+  'Montserrat',
   // generic CSS fallback families
   'sans-serif',
   'serif',

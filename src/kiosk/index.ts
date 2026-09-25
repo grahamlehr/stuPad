@@ -8,7 +8,7 @@
  * testing) are plain, dependency-free functions/classes so they can be unit tested
  * without a DOM or fake timers.
  */
-import { SlideStage } from '../render';
+import { SlideStage, preloadDeckFonts } from '../render';
 import type { Deck, ButtonDef, NavLinkDef, KioskConfig, LogEvent, Rect, SecretPattern } from '../types';
 import { uuid } from '../util';
 
@@ -269,6 +269,7 @@ export class KioskController {
     this.destSlide = null;
     this.visitPath = [];
     this.stage = new SlideStage(this.root, this.deck, { useRaster: this.config.useRaster });
+    await preloadDeckFonts(this.deck.fonts);
     await this.stage.show(1, { type: 'none', ms: 0 });
     this.bindInput();
     await this.reacquireWakeLock();

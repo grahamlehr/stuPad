@@ -2,7 +2,8 @@
 
 Offline iPad PWA: loads a structured .pptx from the Files app, renders it in the browser, runs it as an unattended touch kiosk, logs every tap to IndexedDB, and exports CSV/PDF reports via the iOS share sheet.
 
-- Requirements: `docs/SPEC.md` (source of truth). Architecture, module APIs and ownership: `docs/PLAN.md`.
+- Requirements: `docs/SPEC.md` (source of truth). How it works and a codebase tour: `docs/ARCHITECTURE.md`. Module APIs and ownership: `docs/PLAN.md`.
+- Keep the docs in step with the code: a behaviour change updates SPEC, a module API change updates PLAN, a structural change updates ARCHITECTURE (and the README map if a directory changes).
 - Shared contracts: `src/types.ts`. Every module depends on it — make additive changes only, and update all consumers in the same change.
 
 ## Commands
@@ -13,6 +14,7 @@ npm test           # vitest (jsdom + fake-indexeddb)
 npm run typecheck
 npm run build      # typecheck + production build to dist/
 npm run template   # regenerate public/template.pptx and tests/fixtures/*.pptx with pptxgenjs
+npm run fonts      # re-download public/fonts and regenerate src/render/font-faces.ts (generated: don't hand-edit)
 ```
 
 ## Layout
@@ -25,6 +27,8 @@ npm run template   # regenerate public/template.pptx and tests/fixtures/*.pptx w
 | `src/kiosk/` | Kiosk runtime: tap handling, secret exit sequence, debounce, timeout, wake lock |
 | `src/report/` | Stats, CSV, jsPDF report with hand-drawn canvas charts, share-sheet export |
 | `src/ui/`, `src/main.ts` | Setup screen, admin panel, PIN pad, routing, resume-into-kiosk on launch |
+| `src/types.ts`, `src/util.ts` | Shared contracts; `isoLocal()` and `uuid()` |
+| `scripts/` | `make-template.mjs` (template deck + test fixtures), `make-icons.mjs`, `make-fonts.mjs` |
 | `tests/` | Mirrors `src/`; fixtures in `tests/fixtures/` are generated, not hand-edited |
 
 ## Rules that matter
