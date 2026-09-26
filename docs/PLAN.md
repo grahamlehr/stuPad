@@ -59,6 +59,7 @@ getEvents(f?: EventFilter): Promise<LogEvent[]>  // ordered by id
 countEvents(f?): Promise<number>
 listSessions(): Promise<{ sessionId: string; first: string; last: string; count: number }[]>
 clearEvents(sessionId: string): Promise<void>     // clears all, then appends a log_cleared record
+clearAllData(sessionId: string): Promise<void>    // "Clear previous data": wipes deck, config, state and events in one transaction, plus a log_cleared record
 requestPersistence(): Promise<boolean>
 ```
 

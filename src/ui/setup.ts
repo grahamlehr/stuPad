@@ -11,6 +11,7 @@ import { saveDeck, saveConfig, countEvents } from '../store';
 import { uuid } from '../util';
 import { validateConfig } from './config-validate';
 import { h, clear, debounce, fmtBytes } from './dom';
+import { openClearDataModal } from './clear-data';
 
 export interface SetupDeps {
   container: HTMLElement;
@@ -18,6 +19,8 @@ export interface SetupDeps {
   initialConfig?: KioskConfig;
   /** Called once the admin confirms Go Live. */
   onGoLive: (deck: Deck, config: KioskConfig, sessionId: string) => void;
+  /** "Clear previous data" confirmed: caller wipes storage and restarts on an empty Setup. */
+  onClearAll: () => Promise<void>;
 }
 
 const ISSUE_LABELS: Record<Issue['code'], string> = {
@@ -66,6 +69,8 @@ export class SetupScreen {
   }
 
   destroy(): void {
+    // A pending autosave must not re-save this deck after "Clear previous data" wiped it.
+    this.saveDebounced.cancel();
     this.destroyPreview();
     this.root.remove();
   }
@@ -95,7 +100,7 @@ export class SetupScreen {
     clear(this.root);
     this.root.append(
       h('header', { class: 'setup-header' }, [
-        h('h1', {}, ['GGPad v1.1 setup']),
+        h('h1', {}, ['GGPad v1.2 setup']),
         h('p', { class: 'setup-sub' }, ['Load linked PowerPoint, configure the kiosk, go live, run reports.']),
       ]),
       this.renderLoadStep(),
@@ -137,6 +142,15 @@ export class SetupScreen {
         fileInput,
         h('label', { class: 'btn btn-primary btn-big', for: 'file-input' }, ['Choose .pptx…']),
         h('a', { class: 'btn btn-ghost', href: `${base}template.pptx`, download: true }, ['Download template deck']),
+        h(
+          'button',
+          {
+            class: 'btn btn-ghost clear-data-btn',
+            type: 'button',
+            onclick: () => void openClearDataModal({ deckName: this.deck?.fileName, onConfirm: this.deps.onClearAll }),
+          },
+          ['Clear previous data'],
+        ),
       ]),
       this.parsing ? h('p', { class: 'load-status' }, ['Parsing…']) : null,
       this.fileInfo && !this.parsing

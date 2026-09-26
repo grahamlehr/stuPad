@@ -159,6 +159,47 @@ describe('store: clearEvents', () => {
   });
 });
 
+describe('store: clearAllData', () => {
+  it('wipes deck, config, kiosk state and events, leaving only a log_cleared record', async () => {
+    const store = await freshStore();
+    await store.saveDeck(fakeDeck());
+    await store.saveConfig(defaultConfig('demo.pptx'));
+    await store.setKioskState({ running: true, sessionId: 'sess-1', startedAt: '2026-10-14T10:00:00.000+01:00' });
+    await store.appendEvent(makeEvent());
+    await store.appendEvent(makeEvent({ session_id: 'sess-0' }));
+
+    await store.clearAllData('sess-1');
+
+    expect(await store.loadDeck()).toBeUndefined();
+    expect(await store.loadConfig()).toBeUndefined();
+    expect(await store.getKioskState()).toEqual({ running: false, sessionId: null, startedAt: null });
+    const events = await store.getEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0].event).toBe('log_cleared');
+    expect(events[0].session_id).toBe('sess-1');
+  });
+
+  it('stays wiped after the app relaunches', async () => {
+    const store = await freshStore();
+    await store.saveDeck(fakeDeck());
+    await store.setKioskState({ running: true, sessionId: 'sess-1', startedAt: '2026-10-14T10:00:00.000+01:00' });
+    await store.clearAllData('sess-1');
+
+    await store._closeForTests();
+    expect(await store.loadDeck()).toBeUndefined();
+    expect((await store.getKioskState()).running).toBe(false);
+  });
+
+  it('is ordered after appends already queued ahead of it', async () => {
+    const store = await freshStore();
+    const pending = [store.appendEvent(makeEvent()), store.appendEvent(makeEvent())];
+    const cleared = store.clearAllData('sess-1');
+    await Promise.all([...pending, cleared]);
+    const events = await store.getEvents();
+    expect(events.map((e) => e.event)).toEqual(['log_cleared']);
+  });
+});
+
 describe('store: listSessions', () => {
   it('groups events by session with first/last/count', async () => {
     const store = await freshStore();

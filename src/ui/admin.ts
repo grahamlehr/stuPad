@@ -1,5 +1,5 @@
 /**
- * Admin panel: Resume, Export, Clear log, Setup + quick stats.
+ * Admin panel: Resume, Export, Clear log, Clear previous data, Setup + quick stats.
  * Reached via the secret sequence (+ optional PIN) from kiosk mode.
  */
 import type { Deck, KioskConfig } from '../types';
@@ -8,6 +8,7 @@ import { computeStats, toCsv, csvFileName, pdfFileName, buildPdf, exportFile } f
 import { rasterizeSlide } from '../render';
 import { scopeToFilter, type ExportScope } from './export-scope';
 import { h, clear, fmtBytes } from './dom';
+import { CLEAR_CONFIRM_WORD, openClearDataModal } from './clear-data';
 
 export interface AdminDeps {
   container: HTMLElement;
@@ -18,9 +19,9 @@ export interface AdminDeps {
   onResume: () => void;
   /** Admin chose Setup: caller logs kiosk_stop, stops the controller, clears running state. */
   onSetup: () => void;
+  /** "Clear previous data" confirmed: caller stops the kiosk, wipes storage and restarts on an empty Setup. */
+  onClearAll: () => Promise<void>;
 }
-
-const CLEAR_CONFIRM_WORD = 'CLEAR';
 
 export class AdminPanel {
   private readonly root: HTMLElement;
@@ -87,6 +88,7 @@ export class AdminPanel {
 
       this.renderExportSection(),
       this.renderClearSection(),
+      this.renderClearAllSection(),
 
       h('footer', { class: 'admin-footer muted' }, [
         `${totalCount} event(s) stored total${usageText ? ` · ${usageText} used` : ''}`,
@@ -228,6 +230,25 @@ export class AdminPanel {
         `This permanently deletes all logged events. Type ${CLEAR_CONFIRM_WORD} to confirm.`,
       ]),
       h('div', { class: 'field-row' }, [input, btn]),
+    ]);
+  }
+
+  private renderClearAllSection(): HTMLElement {
+    return h('section', { class: 'admin-clear' }, [
+      h('h2', {}, ['Clear previous data']),
+      h('p', { class: 'muted' }, [
+        'Hand the iPad to someone new: removes the deck, settings and all logged events, then returns to an empty Setup.',
+      ]),
+      h(
+        'button',
+        {
+          class: 'btn btn-danger',
+          type: 'button',
+          onclick: () =>
+            void openClearDataModal({ deckName: this.deps.deck.fileName, onConfirm: this.deps.onClearAll }),
+        },
+        ['Clear previous data…'],
+      ),
     ]);
   }
 

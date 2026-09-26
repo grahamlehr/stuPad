@@ -36,12 +36,21 @@ export function clear(el: HTMLElement): void {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
 
-export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: number): (...args: A) => void {
+export function debounce<A extends unknown[]>(
+  fn: (...args: A) => void,
+  ms: number,
+): ((...args: A) => void) & { cancel: () => void } {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  return (...args: A) => {
+  const debounced = (...args: A) => {
     if (timer !== undefined) clearTimeout(timer);
     timer = setTimeout(() => fn(...args), ms);
   };
+  return Object.assign(debounced, {
+    cancel: () => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    },
+  });
 }
 
 export function fmtBytes(bytes: number): string {
