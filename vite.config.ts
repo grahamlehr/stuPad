@@ -15,8 +15,8 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
       },
       manifest: {
-        name: 'stuPad Kiosk',
-        short_name: 'stuPad',
+        name: 'GGPad Kiosk',
+        short_name: 'GGPad',
         display: 'fullscreen',
         orientation: 'landscape',
         background_color: '#000080',
