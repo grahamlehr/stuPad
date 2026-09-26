@@ -4,6 +4,7 @@ import * as render from '../../src/render';
 import * as store from '../../src/store';
 import { stubObjectUrl } from '../render/setup-url';
 import { deck, slide } from '../render/helpers';
+import { defaultConfig } from '../../src/types';
 
 beforeEach(() => {
   stubObjectUrl();
@@ -121,5 +122,38 @@ describe('SetupScreen: clear previous data', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('SetupScreen: button glow settings', () => {
+  it('shows only the on/off switch while the glow is off', () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+    expect(container.querySelector('.glow-fields input[type="checkbox"]')).toBeTruthy();
+    expect(container.querySelector('.glow-swatches')).toBeNull();
+    screen.destroy();
+  });
+
+  it('shows swatches and sliders when on, and the sliders restyle the preview glow in place', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const initialConfig = { ...defaultConfig('deck.pptx'), glow: { enabled: true, color: '#ffc400', intensity: 5, periodMs: 2000 } };
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+    await flushMicrotasks();
+
+    expect(container.querySelector('.glow-swatch--selected')?.getAttribute('aria-label')).toBe('Gold');
+    const layer = container.querySelector<HTMLElement>('.preview-stage .kiosk-glow-layer')!;
+    expect(layer.querySelectorAll('.kiosk-glow')).toHaveLength(2);
+
+    const destroySpy = vi.spyOn(render.SlideStage.prototype, 'destroy');
+    const speed = container.querySelector<HTMLInputElement>('input[aria-label="Glow speed"]')!;
+    speed.value = '3500'; // mirrored: fast end -> 1000 ms per pulse
+    speed.dispatchEvent(new Event('input'));
+
+    expect(layer.style.getPropertyValue('--glow-half-period')).toBe('500ms');
+    expect(container.querySelector('.preview-stage .kiosk-glow-layer')).toBe(layer); // not rebuilt
+    expect(destroySpy).not.toHaveBeenCalled();
+    screen.destroy();
+    container.remove();
   });
 });

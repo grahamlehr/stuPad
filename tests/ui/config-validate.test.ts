@@ -57,4 +57,13 @@ describe('validateConfig', () => {
   it('rejects a negative debounce', () => {
     expect(validateConfig({ ...defaultConfig('deck.pptx'), debounceMs: -1 }).length).toBeGreaterThan(0);
   });
+
+  it('validates the button glow only when it is on', () => {
+    const glow = { enabled: true, color: '#ffc400', intensity: 5, periodMs: 2000 };
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), glow })).toEqual([]);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), glow: { ...glow, color: 'gold' } }).length).toBe(1);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), glow: { ...glow, intensity: 11 } }).length).toBe(1);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), glow: { ...glow, periodMs: 100 } }).length).toBe(1);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), glow: { ...glow, enabled: false, color: 'gold' } })).toEqual([]);
+  });
 });

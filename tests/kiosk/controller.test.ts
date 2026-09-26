@@ -297,6 +297,51 @@ describe('KioskController', () => {
     expect(logs).toHaveLength(0);
     expect(onAdminRequested).not.toHaveBeenCalled();
   });
+
+  describe('button glow', () => {
+    const GLOW_ON = { glow: { enabled: true, color: '#ffc400', intensity: 5, periodMs: 2000 } };
+    const visibleLayers = () =>
+      Array.from(lastStage!.overlay.querySelectorAll<HTMLElement>('.kiosk-glow-layer')).filter((l) => l.style.display !== 'none');
+
+    it('draws nothing when the glow is off (the default)', async () => {
+      await makeController();
+      expect(lastStage!.overlay.querySelector('.kiosk-glow')).toBeNull();
+    });
+
+    it('glows every home-slide button on start, styled from the config', async () => {
+      await makeController(GLOW_ON);
+      const layers = visibleLayers();
+      expect(layers).toHaveLength(1);
+      expect(layers[0].querySelectorAll('.kiosk-glow')).toHaveLength(1);
+      expect(layers[0].style.getPropertyValue('--glow-color')).toMatch(/^rgba\(255,196,0,/);
+      expect(layers[0].style.getPropertyValue('--glow-half-period')).toBe('1000ms');
+    });
+
+    it('switches to the destination slide glow and back, reusing each slide layer', async () => {
+      await makeController(GLOW_ON);
+      const homeLayer = visibleLayers()[0];
+
+      tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2
+      const destLayers = visibleLayers();
+      expect(destLayers).toHaveLength(1);
+      expect(destLayers[0]).not.toBe(homeLayer);
+      const g = destLayers[0].querySelector<HTMLElement>('.kiosk-glow')!;
+      expect(g.style.left).toBe('300px'); // the slide-2 home link
+      expect(homeLayer.style.display).toBe('none');
+
+      vi.advanceTimersByTime(150);
+      tap(root, HOME_LINK_POINT.x, HOME_LINK_POINT.y); // -> home
+      expect(visibleLayers()).toEqual([homeLayer]);
+      expect(lastStage!.overlay.querySelectorAll('.kiosk-glow-layer')).toHaveLength(2);
+    });
+
+    it('stop() drops the cached layers', async () => {
+      await makeController(GLOW_ON);
+      controller.stop();
+      await controller.start();
+      expect(lastStage!.overlay.querySelectorAll('.kiosk-glow-layer')).toHaveLength(1);
+    });
+  });
 });
 
 describe('KioskController: nav links (multi-slide chains)', () => {
@@ -418,6 +463,16 @@ describe('KioskController: nav links (multi-slide chains)', () => {
     vi.advanceTimersByTime(150);
     tap(root, FALLBACK_HOME_POINT.x, FALLBACK_HOME_POINT.y);
     expect(lastStage!.overlay.querySelectorAll('.kiosk-fallback-home').length).toBe(0);
+  });
+
+  it('the fallback Home button glows too when the glow is on', async () => {
+    await makeChainController({ glow: { enabled: true, color: '#ffffff', intensity: 3, periodMs: 1500 } });
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y);
+    vi.advanceTimersByTime(150);
+    tap(root, NAV_TO_3.x, NAV_TO_3.y); // slide 3 has no home link: fallback drawn
+    const fallback = lastStage!.overlay.querySelector<HTMLElement>('.kiosk-fallback-home')!;
+    expect(fallback.querySelector('.kiosk-glow')).not.toBeNull();
+    expect(fallback.style.getPropertyValue('--glow-half-period')).toBe('750ms');
   });
 });
 
