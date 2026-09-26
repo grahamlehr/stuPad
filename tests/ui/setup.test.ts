@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SetupScreen } from '../../src/ui/setup';
 import * as render from '../../src/render';
+import * as store from '../../src/store';
 import { stubObjectUrl } from '../render/setup-url';
 import { deck, slide } from '../render/helpers';
 
@@ -30,7 +31,7 @@ function makeDeck() {
 describe('SetupScreen: re-validation of a stored deck', () => {
   it('shows warnings for a stored deck without needing the original file bytes', () => {
     const container = document.createElement('div');
-    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn() });
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
     const warningItems = container.querySelectorAll('.issue-group--warning li');
     expect(warningItems.length).toBeGreaterThan(0);
     screen.destroy();
@@ -40,7 +41,7 @@ describe('SetupScreen: re-validation of a stored deck', () => {
 describe('SetupScreen: preview lifecycle on re-render', () => {
   it('destroys the previous SlideStage and releases thumbnails on a full re-render', async () => {
     const container = document.createElement('div');
-    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn() });
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
     await flushMicrotasks();
 
     const destroySpy = vi.spyOn(render.SlideStage.prototype, 'destroy');
@@ -60,7 +61,7 @@ describe('SetupScreen: preview lifecycle on re-render', () => {
 
   it('does not tear down the live preview just to accept warnings', async () => {
     const container = document.createElement('div');
-    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn() });
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
     await flushMicrotasks();
 
     const destroySpy = vi.spyOn(render.SlideStage.prototype, 'destroy');
@@ -78,7 +79,7 @@ describe('SetupScreen: preview lifecycle on re-render', () => {
 
   it('destroy() itself tears down the preview exactly once', async () => {
     const container = document.createElement('div');
-    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn() });
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
     await flushMicrotasks();
 
     const destroySpy = vi.spyOn(render.SlideStage.prototype, 'destroy');
@@ -88,5 +89,37 @@ describe('SetupScreen: preview lifecycle on re-render', () => {
 
     expect(destroySpy).toHaveBeenCalledTimes(1);
     expect(releaseSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SetupScreen: clear previous data', () => {
+  it('shows a Clear previous data button in the Load step', () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+    const btn = container.querySelector('[data-step="load"] .clear-data-btn');
+    expect(btn?.textContent).toBe('Clear previous data');
+    screen.destroy();
+  });
+
+  it('destroy() cancels a pending autosave so a wiped deck is not saved again', async () => {
+    vi.useFakeTimers();
+    try {
+      const saveDeck = vi.spyOn(store, 'saveDeck').mockResolvedValue();
+      const saveConfig = vi.spyOn(store, 'saveConfig').mockResolvedValue();
+      const container = document.createElement('div');
+      const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+      // Any Configure edit schedules a debounced save.
+      const nameInput = container.querySelector('[data-step="configure"] input[type="text"]') as HTMLInputElement;
+      nameInput.value = 'Edited';
+      nameInput.dispatchEvent(new Event('input'));
+      screen.destroy();
+      vi.advanceTimersByTime(1000);
+
+      expect(saveDeck).not.toHaveBeenCalled();
+      expect(saveConfig).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

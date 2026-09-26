@@ -1,13 +1,21 @@
 import './styles.css';
 import { registerSW } from 'virtual:pwa-register';
 import type { Deck, KioskConfig, LogEvent } from './types';
-import { loadDeck, loadConfig, getKioskState, setKioskState, appendEvent, requestPersistence } from './store';
+import {
+  loadDeck,
+  loadConfig,
+  getKioskState,
+  setKioskState,
+  appendEvent,
+  requestPersistence,
+  clearAllData,
+} from './store';
 import { KioskController } from './kiosk';
 import { SetupScreen } from './ui/setup';
 import { AdminPanel } from './ui/admin';
 import { PinPad } from './ui/pinpad';
 import { decideStartupScreen } from './ui/lifecycle';
-import { isoLocal } from './util';
+import { isoLocal, uuid } from './util';
 
 type Screen = 'setup' | 'kiosk';
 
@@ -82,6 +90,7 @@ class App {
       initialDeck: this.deck,
       initialConfig: this.config,
       onGoLive: (deck, config, sessionId) => void this.goLive(deck, config, sessionId),
+      onClearAll: () => this.clearAll(),
     });
     void this.setupScreen.refreshStorageInfo();
   }
@@ -164,6 +173,7 @@ class App {
       sessionId: this.sessionId,
       onResume: () => this.closeAdmin(),
       onSetup: () => void this.exitToSetup(),
+      onClearAll: () => this.clearAll(),
     });
   }
 
@@ -185,6 +195,33 @@ class App {
     await setKioskState({ running: false, sessionId: null, startedAt: null });
     this.sessionId = null;
     this.showSetup();
+  }
+
+  // ---------------------------------------------------------- clear all
+
+  /**
+   * "Clear previous data" (from Setup or the admin panel): tear down whatever is mounted,
+   * wipe every store, then reload so no in-memory deck, config, fonts or object URLs from
+   * the previous user survive. The service worker serves the reload offline.
+   */
+  private async clearAll(): Promise<void> {
+    const sessionId = this.sessionId ?? uuid();
+    this.pinPad?.destroy();
+    this.pinPad = null;
+    this.closeAdmin();
+    this.controller?.stop();
+    this.controller = null;
+    this.setupScreen?.destroy();
+    this.setupScreen = null;
+    this.sessionId = null;
+    try {
+      await clearAllData(sessionId);
+    } catch (err) {
+      // Everything is already torn down; reload into whatever state storage is in.
+      console.error('stuPad: failed to clear data', err);
+      alert('Could not clear the stored data. The app will reload; please try again.');
+    }
+    location.reload();
   }
 }
 

@@ -42,7 +42,7 @@ flowchart TD
 4. **Configure.** Button labels, timeout, return methods, feedback, transition, debounce, secret pattern, PIN, session name. `validateConfig` blocks Go live on invalid values. The deck and config are debounce-saved to IndexedDB as you edit.
 5. **Go live.** A checklist modal (Guided Access, Auto-Lock, charge, brightness) plus a wake-lock probe. Confirming creates a `sessionId` (UUID), writes `KioskState { running: true }`, logs `kiosk_start`, and mounts the kiosk.
 6. **Run.** The kiosk runs unattended. Every tap goes through `KioskController.handleTap` (section 4).
-7. **Exit.** Tapping the four screen corners in the configured order within the time window opens the admin panel (after a PIN pad if a PIN is set). From there: Resume (same session, no new `kiosk_start`), Export, Clear log, or Setup (logs `kiosk_stop`, clears the running flag).
+7. **Exit.** Tapping the four screen corners in the configured order within the time window opens the admin panel (after a PIN pad if a PIN is set). From there: Resume (same session, no new `kiosk_start`), Export, Clear log, Clear previous data (see below), or Setup (logs `kiosk_stop`, clears the running flag).
 8. **Relaunch.** On launch `main.ts` reads `KioskState`. If a session was running and a deck and config exist, it goes straight back into kiosk mode on the home slide and logs `app_resume`. So a crash, kill or power cycle recovers by itself.
 
 ## 3. Deck model and PPTX parsing (`src/pptx/`)
@@ -137,7 +137,7 @@ Details that matter:
 
 - **Durability.** `appendEvent` resolves only after the transaction's `done`, so a resolved write survives a kill. Writes go through an in-memory queue (`enqueue`) so ids follow call order. The kiosk never awaits `appendEvent` on the tap path (`App.log` in `main.ts` fire-and-forgets and reports errors to the console).
 - **`t` mirror.** Each stored event carries an epoch-ms `t` used for range queries; it is stripped before rows are returned. Range comparisons are by instant, not string.
-- **Append-only.** The only deletion is `clearEvents(sessionId)`: it clears the store, then appends a `log_cleared` record so the clear itself is logged.
+- **Append-only.** Events are only ever deleted in bulk, and each bulk delete appends a `log_cleared` record so the clear itself is logged. `clearEvents(sessionId)` clears the events store. `clearAllData(sessionId)` ("Clear previous data") clears the deck, config, state and events stores in one transaction so the next person starts from nothing.
 - **Migration shim.** `loadDeck` defaults `navLinks`/`backLinks` to `[]` for decks saved before those fields existed.
 - **Persistence.** `requestPersistence()` asks Safari not to evict the data.
 - No `localStorage` anywhere.
@@ -156,7 +156,8 @@ No framework; `ui/dom.ts` provides `h(tag, props, children)`, `clear`, `debounce
 
 - **`main.ts` `App`** is the router and owner of the session. It holds `deck`, `config`, `sessionId`, the `KioskController`, and creates the fixed `.kiosk-root` element. `log()` stamps `ts` (`isoLocal`) and `session_id` and appends to the store. Admin, PIN pad and setup are overlays/screens it mounts and destroys. It also logs `app_resume` when the page becomes visible in kiosk mode.
 - **`ui/setup.ts` `SetupScreen`**: the five-step admin screen described in section 2.
-- **`ui/admin.ts` `AdminPanel`**: session stat tiles, export scope (session / date range / all) with a live event count, CSV and PDF export, and Clear log behind typing `CLEAR`.
+- **`ui/admin.ts` `AdminPanel`**: session stat tiles, export scope (session / date range / all) with a live event count, CSV and PDF export, Clear log behind typing `CLEAR`, and Clear previous data.
+- **`ui/clear-data.ts`**: the "Clear previous data" confirmation dialog shared by Setup (Load step) and the admin panel. On confirm, `App.clearAll()` in `main.ts` stops the kiosk and tears down the mounted screen (cancelling Setup's pending autosave so the old deck isn't saved again), calls `clearAllData`, then reloads the page so no in-memory deck, fonts or object URLs survive.
 - **`ui/pinpad.ts` + `pinpad-logic.ts`**: numeric PIN overlay; three wrong attempts or 30 s idle returns to the kiosk. Wrong attempts log `admin_unlock_fail`.
 - **Pure helpers, unit-tested without a DOM:** `lifecycle.ts` (`decideStartupScreen`), `config-validate.ts`, `export-scope.ts`.
 - `styles.css` holds all styling, including the `html.kiosk-active` lock-down rules (no overscroll, fixed root).

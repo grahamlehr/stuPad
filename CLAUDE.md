@@ -35,7 +35,7 @@ npm run fonts      # re-download public/fonts and regenerate src/render/font-fac
 
 - **No UI framework, no chart library, no runtime network.** Everything must work offline after first load; the service worker precaches the app shell, fonts and libraries.
 - **12-hour unattended runs:** every `stop()`/`destroy()` removes its listeners, timers and wake lock and revokes the object URLs it created. Never rebuild slide DOM on each tap. Tap to slide change must stay under 150 ms.
-- **Log durability:** `appendEvent` resolves only after the IndexedDB transaction completes. Never use `localStorage` for data. Events are append-only; the only deletion is `clearEvents`, which is itself logged.
+- **Log durability:** `appendEvent` resolves only after the IndexedDB transaction completes. Never use `localStorage` for data. Events are append-only; the only deletions are `clearEvents` and `clearAllData` ("Clear previous data"), and each is itself logged.
 - **Geometry:** all deck coordinates are slide px (slide width = `SLIDE_W` = 1920). Convert EMU in the parser only; convert screen coordinates via `SlideStage.toSlide()` only.
 - **Timestamps:** use `isoLocal()` from `src/util.ts` (ISO 8601 with local offset). Compare instants, not strings.
 - **Kiosk input:** the secret sequence is checked before any other tap handling; corner taps never trigger buttons. Debounced taps are not logged.

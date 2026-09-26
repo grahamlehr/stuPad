@@ -175,6 +175,13 @@ a {
   gap: 12px;
 }
 
+/* Kept apart from the load actions so it isn't tapped by mistake. */
+.clear-data-btn {
+  margin-left: auto;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
 .sr-only-input {
   position: absolute;
   width: 1px;
@@ -442,6 +449,11 @@ input[type='number'] {
 
 .clear-confirm-input {
   min-height: 44px;
+}
+
+.modal-card .clear-confirm-input {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .admin-footer {

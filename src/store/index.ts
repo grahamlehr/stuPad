@@ -247,6 +247,29 @@ export async function clearEvents(sessionId: string): Promise<void> {
   });
 }
 
+/**
+ * "Clear previous data": wipes the deck (with its media and rasters), config, kiosk state
+ * and every event in one transaction, so the next person starts from an empty Setup. The
+ * same transaction appends a `log_cleared` record, so the wipe itself is logged.
+ */
+export async function clearAllData(sessionId: string): Promise<void> {
+  return enqueue(async () => {
+    const db = await openDatabase();
+    const tx = db.transaction([STORE_DECK, STORE_CONFIG, STORE_STATE, STORE_EVENTS], 'readwrite');
+    await Promise.all([
+      tx.objectStore(STORE_DECK).clear(),
+      tx.objectStore(STORE_CONFIG).clear(),
+      tx.objectStore(STORE_STATE).clear(),
+      tx.objectStore(STORE_EVENTS).clear(),
+    ]);
+    const clearedEvent: LogEvent = { ts: isoLocal(), session_id: sessionId, event: 'log_cleared' };
+    const stored: Partial<StoredEvent> = { ...clearedEvent, t: parseInstant(clearedEvent.ts) };
+    delete stored.id;
+    await tx.objectStore(STORE_EVENTS).add(stored as StoredEvent);
+    await tx.done;
+  });
+}
+
 // ------------------------------------------------------------- persistence
 
 export async function requestPersistence(): Promise<boolean> {

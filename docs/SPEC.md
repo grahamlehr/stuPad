@@ -103,6 +103,8 @@ Validation errors (fewer than 2 buttons, broken links, unreadable file) block go
 
 The preview shows the home slide with each detected button outlined and labelled, plus a thumbnail of each destination slide. Tapping a button in preview navigates as it will in kiosk mode.
 
+**Clear previous data.** The Load step has a "Clear previous data" button so the iPad can be handed to someone new without the last user's slides still showing. It removes the stored deck (with its images), settings, kiosk state and every logged event, then reloads into an empty Setup. It requires typing `CLEAR`, warns that logged taps cannot be recovered, and the wipe is itself logged as a single `log_cleared` record. The same action is on the admin panel.
+
 **Configurable settings**
 
 | Setting | Default | Range / options |
@@ -190,11 +192,11 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 
 `dwell_ms` on each return gives time spent per destination, which is the most useful engagement measure after raw press counts. `slide_nav` events let a report break that down further into time spent per slide within a multi-slide visit, and count arrivals at each slide.
 
-Logs persist until the admin explicitly clears them after export. Clearing requires a confirmation and is itself logged.
+Logs persist until the admin explicitly clears them after export, either with Clear log or with Clear previous data (which also removes the deck and settings). Both require a confirmation and are themselves logged.
 
 ## Exit and reporting (CSV and PDF)
 
-After the secret sequence (and PIN, if set) the admin lands on an admin panel with Resume, Export, Clear log and Setup. Three wrong PIN entries, or 30 s without input, return to the kiosk without granting access; each wrong entry is logged as `admin_unlock_fail`. Clearing the log requires typing `CLEAR`.
+After the secret sequence (and PIN, if set) the admin lands on an admin panel with Resume, Export, Clear log, Clear previous data and Setup. Three wrong PIN entries, or 30 s without input, return to the kiosk without granting access; each wrong entry is logged as `admin_unlock_fail`. Clearing the log, or clearing all previous data, requires typing `CLEAR`.
 
 **Getting files off the iPad.** Exports use the iOS share sheet (Web Share API with files), giving Save to Files, AirDrop and Mail. Plain browser downloads are unreliable in Home Screen web apps, so they are only a fallback.
 
