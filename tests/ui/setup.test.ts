@@ -48,11 +48,12 @@ describe('SetupScreen: preview lifecycle on re-render', () => {
     const destroySpy = vi.spyOn(render.SlideStage.prototype, 'destroy');
     const releaseSpy = vi.spyOn(render, 'releaseThumbnails');
 
-    // The session-name field goes through the generic `update()` path, which does a full render().
-    const nameInput = container.querySelector('[data-step="configure"] input[type="text"]') as HTMLInputElement;
-    expect(nameInput).toBeTruthy();
-    nameInput.value = 'New name';
-    nameInput.dispatchEvent(new Event('input'));
+    // Selects go through the generic `update()` path, which does a full render().
+    const selects = container.querySelectorAll<HTMLSelectElement>('[data-step="configure"] select');
+    const transitionSelect = Array.from(selects).find((s) => Array.from(s.options).some((o) => o.value === 'fade'))!;
+    expect(transitionSelect).toBeTruthy();
+    transitionSelect.value = 'none';
+    transitionSelect.dispatchEvent(new Event('change'));
     await flushMicrotasks();
 
     expect(destroySpy).toHaveBeenCalled();
@@ -90,6 +91,104 @@ describe('SetupScreen: preview lifecycle on re-render', () => {
 
     expect(destroySpy).toHaveBeenCalledTimes(1);
     expect(releaseSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SetupScreen: typing in Configure text fields', () => {
+  function mount() {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+    const cleanup = () => {
+      screen.destroy();
+      container.remove();
+    };
+    return { container, cleanup };
+  }
+
+  function goLiveButton(container: HTMLElement): HTMLButtonElement {
+    return container.querySelector('[data-step="golive"] button') as HTMLButtonElement;
+  }
+
+  function type(input: HTMLInputElement, value: string): void {
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+  }
+
+  it('keeps the focused session-name input and saves the config', async () => {
+    vi.useFakeTimers();
+    const { container, cleanup } = mount();
+    try {
+      const saveConfig = vi.spyOn(store, 'saveConfig').mockResolvedValue();
+      vi.spyOn(store, 'saveDeck').mockResolvedValue();
+      const nameInput = container.querySelector('[data-step="configure"] input[type="text"]') as HTMLInputElement;
+      nameInput.focus();
+      expect(document.activeElement).toBe(nameInput);
+
+      type(nameInput, 'Booth A');
+      type(nameInput, 'Booth AB');
+
+      expect(nameInput.isConnected).toBe(true);
+      expect(document.activeElement).toBe(nameInput);
+      expect(container.querySelector('[data-step="configure"] input[type="text"]')).toBe(nameInput);
+
+      vi.advanceTimersByTime(1000);
+      expect(saveConfig).toHaveBeenCalledTimes(1);
+      expect(saveConfig.mock.calls[0][0].sessionName).toBe('Booth AB');
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not tear down the live preview while typing', async () => {
+    const { container, cleanup } = mount();
+    await flushMicrotasks();
+    const destroySpy = vi.spyOn(render.SlideStage.prototype, 'destroy');
+    const releaseSpy = vi.spyOn(render, 'releaseThumbnails');
+
+    type(container.querySelector('[data-step="configure"] input[type="text"]') as HTMLInputElement, 'Typed');
+    await flushMicrotasks();
+
+    expect(destroySpy).not.toHaveBeenCalled();
+    expect(releaseSpy).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('disables Go live and shows the error when the session name is emptied, and re-enables it', () => {
+    const { container, cleanup } = mount();
+    // The test deck has warnings; accept them so only the config decides Go live.
+    const accept = container.querySelector('.issue-group--warning input[type="checkbox"]') as HTMLInputElement;
+    accept.checked = true;
+    accept.dispatchEvent(new Event('change'));
+    expect(goLiveButton(container).disabled).toBe(false);
+
+    const nameInput = container.querySelector('[data-step="configure"] input[type="text"]') as HTMLInputElement;
+    type(nameInput, '');
+    expect(goLiveButton(container).disabled).toBe(true);
+    expect(container.querySelector('[data-step="configure"] .config-errors')?.textContent).toContain(
+      'Session name is required.',
+    );
+
+    type(nameInput, 'Back again');
+    expect(goLiveButton(container).disabled).toBe(false);
+    expect(container.querySelector('[data-step="configure"] .config-errors')?.textContent).toBe('');
+    cleanup();
+  });
+
+  it('updates the preview outline label in place as a button label is typed', async () => {
+    const { container, cleanup } = mount();
+    await flushMicrotasks();
+    const labelInput = container.querySelectorAll<HTMLInputElement>('[data-step="configure"] .field-list input[type="text"]')[0];
+    const outline = container.querySelector<HTMLElement>('.preview-stage .preview-btn-outline[data-button-id="b1"]')!;
+    expect(outline).toBeTruthy();
+
+    type(labelInput, 'Alpha');
+
+    expect(outline.isConnected).toBe(true);
+    expect(outline.querySelector('.preview-btn-label')?.textContent).toBe('Alpha');
+    expect(container.querySelectorAll<HTMLInputElement>('[data-step="configure"] .field-list input[type="text"]')[0]).toBe(labelInput);
+    cleanup();
   });
 });
 
