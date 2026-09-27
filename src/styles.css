@@ -1,45 +1,73 @@
 /* stuPad: admin UI (Setup/Admin/PIN pad) + kiosk chrome reset.
-   Light theme with a dark-mode variant; large touch targets (>= 44pt) throughout. */
+   Emota brand (docs/brand/emota-brand.css and the cheat sheet next to it): dark by default,
+   the brand's light variant when the iPad is in light appearance. Montserrat comes from the
+   bundled public/fonts files (see ensureFontFaces in src/render/fonts.ts), never Google Fonts,
+   so the UI stays offline. Large touch targets (>= 44pt) throughout. */
 
 :root {
-  /* "Cobalt sky" palette: cobalt blue primary, navy for strong emphasis,
-     sky blue for secondary/hover accents, slate blue-grey for muted text/borders. */
-  --bg: #f7f9fb;
-  --surface: #ffffff;
-  --text: #101f38;
-  --text-muted: #5c7085;
-  --border: #cdd8e2;
-  --navy: #000080;
-  --accent: #0047ab;
-  --accent-contrast: #ffffff;
-  --accent-secondary: #82c8e5;
-  --accent-secondary-contrast: #101f38;
-  --danger: #b3261e;
-  --danger-contrast: #ffffff;
-  --warning-bg: #fff3cd;
-  --warning-text: #7a5b00;
-  --error-bg: #fbe4e2;
-  --error-text: #8a231b;
-  --ok-text: #1c6e46;
-  --radius: 12px;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* Emota core palette */
+  --em-blackberry: #2a034c; /* logo colour, primary brand surface */
+  --em-night: #180a30; /* page background */
+  --em-night-deep: #120322; /* dialog tint */
+  --em-plum: #3a1164; /* raised controls */
+  --em-teal: #00ca9f; /* the accent */
+  --em-mint: #7ef5bd; /* glows and outlines */
+  --em-teal-ink: #042b29; /* text on teal */
+
+  --em-radius-control: 5px;
+  --em-radius-panel: 8px;
+  --em-radius-dialog: 10px;
+  --em-track-tight: -0.045em;
+  --em-track-caps: 0.18em;
+  --em-glow: 0 0 14px rgba(126, 245, 189, 0.7);
+  --em-backdrop: rgba(5, 0, 12, 0.78);
+
+  --font: Montserrat, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* Slides keep the platform font for any run without its own face, as before the rebrand. */
+  --font-slide: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+  /* Semantic roles, dark (brand default) */
+  --bg: var(--em-night);
+  --surface: var(--em-blackberry);
+  --surface-2: var(--em-plum);
+  --text: #fbfaff;
+  --text-muted: #c5c5d6;
+  --border: rgba(226, 226, 242, 0.19);
+  --accent: var(--em-teal);
+  --accent-text: var(--em-teal);
+  --accent-contrast: var(--em-teal-ink);
+  --accent-soft: #073d3d;
+  --outline: var(--em-mint);
+  --outline-contrast: var(--em-teal-ink);
+  --danger: #662532;
+  --danger-border: #ee8290;
+  --danger-contrast: #fff2f3;
+  --warning-bg: rgba(240, 195, 110, 0.12);
+  --warning-text: #fab600;
+  --error-bg: rgba(255, 145, 202, 0.12);
+  --error-text: #ff91ca;
+  --ok-text: var(--accent-text);
+  --shadow-dialog: 0 30px 90px rgba(2, 0, 8, 0.48);
+  color-scheme: dark;
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root {
-    --bg: #0b1220;
-    --surface: #131c30;
-    --text: #eef1f6;
-    --text-muted: #a9b8c9;
-    --border: #2b3a52;
-    --accent: #4d82d6;
-    --accent-secondary: #82c8e5;
-    --accent-secondary-contrast: #0b1220;
-    --warning-bg: #4a3a00;
-    --warning-text: #ffdd7a;
-    --error-bg: #4a201d;
-    --error-text: #ff9d94;
-    --ok-text: #6fd39a;
+    --bg: #f6f4fb;
+    --surface: #ffffff;
+    --surface-2: #efebf7;
+    --text: var(--em-blackberry);
+    --text-muted: #5d5572;
+    --border: rgba(42, 3, 76, 0.14);
+    --accent-text: #007a62;
+    --accent-soft: #d9f5ed;
+    --outline: var(--em-teal);
+    --warning-bg: #fff1cc;
+    --warning-text: #8a5a00;
+    --error-bg: #fde6f1;
+    --error-text: #b0226b;
+    --shadow-dialog: 0 30px 90px rgba(42, 3, 76, 0.16);
+    color-scheme: light;
   }
 }
 
@@ -53,20 +81,31 @@ body {
   margin: 0;
 }
 
+html {
+  background: var(--bg);
+}
+
 body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
   -webkit-text-size-adjust: 100%;
   overscroll-behavior: none;
 }
 
 /* While the kiosk screen is live, force the document background to black so a slide
-   change's re-layout/re-raster never flashes the (near-white) --bg through unpainted tiles
+   change's re-layout/re-raster never flashes the --bg through unpainted tiles
    on iPadOS Safari. Set/removed on <html> by main.ts around enterKiosk()/exitToSetup(). */
 html.kiosk-active,
 html.kiosk-active body {
   background: #000;
+}
+
+/* Slide DOM (kiosk, Setup preview, thumbnails) keeps the platform font, not the UI's. */
+.sr-slide {
+  font-family: var(--font-slide);
 }
 
 #app {
@@ -81,11 +120,37 @@ select {
 }
 
 a {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .muted {
   color: var(--text-muted);
+}
+
+h1,
+h2 {
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: var(--em-track-tight);
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: clamp(2rem, 5vw, 3rem);
+}
+
+h2 {
+  font-size: 1.5rem;
+  margin: 0 0 16px;
+}
+
+h3 {
+  font-weight: 700;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ------------------------------------------------------------------ buttons */
@@ -98,12 +163,14 @@ a {
   min-height: 44px;
   min-width: 44px;
   padding: 10px 18px;
-  border-radius: var(--radius);
+  border-radius: var(--em-radius-control);
   border: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--surface-2);
   color: var(--text);
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.015em;
+  text-decoration: none;
   cursor: pointer;
   user-select: none;
 }
@@ -115,24 +182,27 @@ a {
 
 .btn-primary {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: transparent;
   color: var(--accent-contrast);
+  font-weight: 800;
 }
 
 .btn-danger {
   background: var(--danger);
-  border-color: var(--danger);
+  border-color: var(--danger-border);
   color: var(--danger-contrast);
 }
 
 .btn-ghost {
   background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
 }
 
 .btn-big {
   min-height: 56px;
   padding: 14px 28px;
-  font-size: 18px;
+  font-size: 17px;
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -140,7 +210,16 @@ a {
 .setup-screen {
   max-width: 900px;
   margin: 0 auto;
-  padding: 24px 20px 80px;
+  padding: 32px 20px 80px;
+}
+
+.setup-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin-bottom: 12px;
 }
 
 .setup-header h1 {
@@ -150,28 +229,43 @@ a {
 .setup-version {
   color: var(--text-muted);
   font-size: 0.85rem;
-  margin: 2px 0 8px;
+  margin: 2px 0 0;
+}
+
+/* The lockup files carry transparent padding (about 13.4% of the width on every side), so
+   negative margins pull the visible mark flush right and keep the row as tall as the heading. */
+.setup-logo {
+  --logo-w: 178px;
+  display: block;
+  flex: none;
+  margin: calc(var(--logo-w) * -0.134) calc(var(--logo-w) * -0.134) calc(var(--logo-w) * -0.134) auto;
+}
+
+.setup-logo img {
+  display: block;
+  width: var(--logo-w);
+  height: auto;
 }
 
 .setup-sub {
   color: var(--text-muted);
-  margin-top: 0;
+  line-height: 1.6;
+  margin: 0 0 24px;
 }
 
-.setup-step {
+.setup-step,
+.admin-stats,
+.admin-export,
+.admin-clear {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--em-radius-panel);
   padding: 20px;
   margin-bottom: 20px;
 }
 
 .setup-step--disabled {
   opacity: 0.55;
-}
-
-.setup-step h2 {
-  margin-top: 0;
 }
 
 .load-row {
@@ -184,8 +278,9 @@ a {
 /* Kept apart from the load actions so it isn't tapped by mistake. */
 .clear-data-btn {
   margin-left: auto;
-  color: var(--danger);
-  border-color: var(--danger);
+  background: transparent;
+  color: var(--error-text);
+  border-color: var(--error-text);
 }
 
 .sr-only-input {
@@ -201,7 +296,7 @@ a {
 }
 
 .issue-group {
-  border-radius: var(--radius);
+  border-radius: var(--em-radius-panel);
   padding: 12px 16px;
   margin-top: 12px;
 }
@@ -236,6 +331,7 @@ a {
 .checkbox-row input {
   width: 22px;
   height: 22px;
+  accent-color: var(--accent);
 }
 
 .preview-toolbar {
@@ -252,12 +348,12 @@ a {
   width: 100%;
   aspect-ratio: 16 / 9;
   background: #000;
-  border-radius: 8px;
+  border-radius: var(--em-radius-panel);
   overflow: hidden;
 }
 
 .preview-btn-outline {
-  border: 3px solid var(--accent-secondary);
+  border: 3px solid var(--outline);
   box-sizing: border-box;
   cursor: pointer;
   display: flex;
@@ -266,8 +362,9 @@ a {
 }
 
 .preview-btn-label {
-  background: var(--accent-secondary);
-  color: var(--accent-secondary-contrast);
+  background: var(--outline);
+  color: var(--outline-contrast);
+  font-family: var(--font);
   font-size: 22px;
   font-weight: 700;
   padding: 2px 8px;
@@ -283,7 +380,7 @@ a {
 
 .thumb {
   border: 2px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--em-radius-panel);
   overflow: hidden;
   text-align: center;
   font-size: 13px;
@@ -291,7 +388,7 @@ a {
 }
 
 .thumb--unlinked {
-  border-color: var(--danger);
+  border-color: var(--error-text);
 }
 
 .thumb-label {
@@ -322,10 +419,14 @@ input[type='text'],
 input[type='number'] {
   min-height: 44px;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--em-radius-control);
   border: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--surface-2);
   color: var(--text);
+}
+
+input[type='range'] {
+  accent-color: var(--accent);
 }
 
 .storage-info {
@@ -339,7 +440,9 @@ input[type='number'] {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--em-backdrop);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -349,8 +452,10 @@ input[type='number'] {
 
 .modal-card {
   background: var(--surface);
-  border-radius: var(--radius);
-  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--em-radius-dialog);
+  box-shadow: var(--shadow-dialog);
+  padding: 28px;
   max-width: 520px;
   width: 100%;
   max-height: 90vh;
@@ -374,7 +479,7 @@ input[type='number'] {
   background: var(--warning-bg);
   color: var(--warning-text);
   padding: 10px 14px;
-  border-radius: 8px;
+  border-radius: var(--em-radius-panel);
 }
 
 /* ------------------------------------------------------------------ admin */
@@ -392,7 +497,7 @@ input[type='number'] {
 .admin-screen {
   max-width: 900px;
   margin: 0 auto;
-  padding: 24px 20px 60px;
+  padding: 32px 20px 60px;
 }
 
 .admin-header {
@@ -401,6 +506,11 @@ input[type='number'] {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
+  margin-bottom: 20px;
+}
+
+.admin-header h1 {
+  margin: 0;
 }
 
 .admin-actions {
@@ -408,38 +518,37 @@ input[type='number'] {
   gap: 12px;
 }
 
-.admin-stats,
-.admin-export,
-.admin-clear {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
-  margin-top: 20px;
-}
-
 .stat-row {
   display: flex;
-  gap: 16px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
 .stat-tile {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: space-between;
+  gap: 12px;
   background: var(--bg);
-  border-radius: 10px;
-  padding: 12px 18px;
-  min-width: 100px;
-  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: var(--em-radius-panel);
+  padding: 14px 18px;
+  min-width: 120px;
 }
 
 .stat-value {
-  font-size: 28px;
+  font-size: 2.2rem;
   font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.05em;
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-label {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .export-buttons {
@@ -472,7 +581,9 @@ input[type='number'] {
 .pinpad-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.75);
+  background: var(--em-backdrop);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -481,22 +592,28 @@ input[type='number'] {
 
 .pinpad-card {
   background: var(--surface);
-  border-radius: var(--radius);
-  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--em-radius-dialog);
+  box-shadow: var(--shadow-dialog);
+  padding: 28px 24px 24px;
   width: 320px;
   text-align: center;
 }
 
 .pinpad-title {
-  font-weight: 700;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: var(--em-track-caps);
+  text-transform: uppercase;
 }
 
 .pinpad-dots {
   display: flex;
   justify-content: center;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
 .pinpad-dot {
@@ -509,6 +626,7 @@ input[type='number'] {
 .pinpad-dot--filled {
   background: var(--accent);
   border-color: var(--accent);
+  box-shadow: var(--em-glow);
 }
 
 .pinpad-grid {
@@ -519,11 +637,13 @@ input[type='number'] {
 
 .pinpad-key {
   min-height: 56px;
-  border-radius: 10px;
+  border-radius: var(--em-radius-panel);
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--surface-2);
   color: var(--text);
   font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
 

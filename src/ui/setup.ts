@@ -114,8 +114,13 @@ export class SetupScreen {
     clear(this.root);
     this.root.append(
       h('header', { class: 'setup-header' }, [
-        h('h1', {}, ['GGPad setup']),
-        h('p', { class: 'setup-version' }, [`v${import.meta.env.VITE_APP_VERSION}`]),
+        h('div', { class: 'setup-title-row' }, [
+          h('div', {}, [
+            h('h1', {}, ['GGPad setup']),
+            h('p', { class: 'setup-version' }, [`v${import.meta.env.VITE_APP_VERSION}`]),
+          ]),
+          emotaLogo(),
+        ]),
         h('p', { class: 'setup-sub' }, ['Load linked PowerPoint, configure the kiosk, go live, run reports.']),
       ]),
       this.renderLoadStep(),
@@ -781,4 +786,13 @@ export class SetupScreen {
     }
     el.textContent = `${count} logged event(s)${usageText}`;
   }
+}
+
+/** Emota lockup: the white file on the dark theme, the blackberry file in light appearance. */
+function emotaLogo(): HTMLElement {
+  const base = import.meta.env.BASE_URL;
+  return h('picture', { class: 'setup-logo' }, [
+    h('source', { srcset: `${base}emota-logo-blackberry.png`, media: '(prefers-color-scheme: light)' }),
+    h('img', { src: `${base}emota-logo-white.png`, alt: 'Emota, an Inizio Engage company' }),
+  ]);
 }
