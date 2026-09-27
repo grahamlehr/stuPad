@@ -40,7 +40,9 @@ export function glowRadius(elements: SlideElement[], id: string, bounds: Rect): 
 }
 
 /** Every tappable area the deck defines on `slide`: buttons on slide 1; Home, Back and
- * onward nav links elsewhere. The kiosk's fallback Home button is added separately. */
+ * onward nav links elsewhere; poll/rating options anywhere (deduped against the above by
+ * shape id, so a poll option that's also a button/link isn't glowed twice). The kiosk's
+ * fallback Home button is added separately. */
 export function glowTargets(deck: Deck, slide: number): GlowTarget[] {
   const elements = deck.slides.find((s) => s.index === slide)?.elements ?? [];
   const areas: { id: string; bounds: Rect }[] =
@@ -51,6 +53,12 @@ export function glowTargets(deck: Deck, slide: number): GlowTarget[] {
           ...(deck.backLinks ?? []).filter((l) => l.slide === slide),
           ...(deck.navLinks ?? []).filter((l) => l.slide === slide),
         ];
+  const seenIds = new Set(areas.map((a) => a.id));
+  for (const p of (deck.pollOptions ?? []).filter((p) => p.slide === slide)) {
+    if (seenIds.has(p.id)) continue;
+    seenIds.add(p.id);
+    areas.push({ id: p.id, bounds: p.bounds });
+  }
   return areas.map((a) => ({ bounds: a.bounds, radius: glowRadius(elements, a.id, a.bounds) }));
 }
 

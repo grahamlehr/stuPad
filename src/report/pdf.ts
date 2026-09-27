@@ -1,7 +1,7 @@
 // Type-only import: jsPDF (~400 kB) is loaded on demand in buildPdf so kiosk startup never parses it.
 import type { jsPDF } from 'jspdf';
 import type { Deck, KioskConfig, LogEvent } from '../types';
-import { computeStats, type ReportStats } from './stats';
+import { computeStats, type ReportStats, type PollOptionMeta } from './stats';
 import { buttonColor, returnMethodColor } from './colors';
 import {
   drawDonutChart,
@@ -14,6 +14,7 @@ import {
   drawSlideTimeChart,
   drawPathTable,
   drawUptimeStrip,
+  drawPollChart,
   ATTRACT_BAND_LEGEND_COLOR,
   type NamedValue,
   type ActivityChartData,
@@ -23,6 +24,7 @@ import {
   type PathTableData,
   type PathTableEntry,
   type UptimeStripData,
+  type PollChartData,
 } from './charts';
 
 const PAGE_W = 297; // A4 landscape, mm
@@ -215,7 +217,16 @@ export async function buildPdf(
   for (const b of deck.buttons) {
     labels[b.id] = config.buttonLabels[b.id] ?? b.defaultLabel;
   }
-  const stats = computeStats(events, labels);
+  const pollOptions: PollOptionMeta[] = (deck.pollOptions ?? []).map((p) => ({
+    poll: p.poll,
+    choice: p.choice,
+    kind: p.kind,
+    label: p.label,
+  }));
+  const stats = computeStats(events, labels, { pollOptions, pollLabels: config.pollLabels });
+  // Only when the log actually has vote events, so a deck/report without polls is unchanged
+  // (SPEC: the Interactions tile only appears then).
+  const hasVotes = events.some((e) => e.event === 'vote');
 
   const colorOf = new Map<string, string>();
   deck.buttons.forEach((b, i) => colorOf.set(b.id, buttonColor(i)));
@@ -267,6 +278,9 @@ export async function buildPdf(
       [String(stats.buttons.length), 'Buttons'],
       [stats.uptimePct !== null ? `${Math.round(stats.uptimePct)}%` : 'n/a', 'Uptime'],
     ];
+    // Headline engagement count (visits + home-slide votes with no link, decision 4), shown
+    // first and only when the log has any vote events, so a deck without polls is unchanged.
+    if (hasVotes) tiles.unshift([String(stats.interactions), 'Interactions']);
     if (stats.totalNavTaps > 0) tiles.push([String(stats.totalNavTaps), 'Onward nav taps']);
     // Taps that ended an attract loop, over attract starts: the pull-in rate. Only shown once
     // the loop has actually run at least once in scope.
@@ -474,6 +488,29 @@ export async function buildPdf(
       const pathTableData: PathTableData = { entries: pathEntries };
       const pathUrl = renderChartImage(drawPathTable, pathTableData, 720, 520, fontScaleFor(720, rightW, 12));
       placeImage(doc, pathUrl, 720, 520, rightX, MARGIN + 14, rightW);
+    }
+
+    // ---------------------------------------------------------------- pages: Poll results (one per poll with votes)
+    for (const poll of stats.polls) {
+      if (poll.total === 0) continue;
+      doc.addPage();
+      drawPageTitle(doc, `Poll results: ${poll.label}`);
+
+      const chartData: PollChartData = {
+        bars: poll.choices.map((c, i) => ({ label: c.label, count: c.count, pct: c.pct, color: buttonColor(i) })),
+      };
+      const chartUrl = renderChartImage(drawPollChart, chartData, 1400, 600, fontScaleFor(1400, CONTENT_W, 12));
+      const chartH = placeImage(doc, chartUrl, 1400, 600, MARGIN, MARGIN + 16, CONTENT_W);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(120, 120, 120);
+      const captionY = MARGIN + 16 + chartH + 8;
+      const voteWord = poll.total === 1 ? 'vote' : 'votes';
+      doc.text(`${poll.total} ${voteWord}`, MARGIN, captionY);
+      if (poll.kind === 'rate' && poll.mean !== null) {
+        doc.text(`Mean score ${poll.mean.toFixed(1)} (n = ${poll.total})`, MARGIN + 60, captionY);
+      }
     }
 
     // ---------------------------------------------------------------- page: Hour-by-day (multi-day only; last page)

@@ -35,6 +35,7 @@ function fakeDeck(): Deck {
     homeLinks: [],
   navLinks: [],
   backLinks: [],
+  pollOptions: [],
     media: {},
     fonts: [],
   };
@@ -106,6 +107,53 @@ describe('store: config migration', () => {
     await store.saveConfig(cfg);
     const loaded = await store.loadConfig();
     expect(loaded?.attract).toEqual({ enabled: true, idleSec: 30, mode: 'pulse', slides: [2, 3], slideSec: 8 });
+  });
+
+  it('defaults pollLabels to {} for a config saved before it existed', async () => {
+    const store = await freshStore();
+    const { pollLabels: _pollLabels, ...oldCfg } = defaultConfig('demo.pptx');
+    await store.saveConfig(oldCfg as KioskConfig);
+    const loaded = await store.loadConfig();
+    expect(loaded?.pollLabels).toEqual({});
+  });
+
+  it('leaves explicitly-set pollLabels alone', async () => {
+    const store = await freshStore();
+    const cfg = { ...defaultConfig('demo.pptx'), pollLabels: { 'Topic\u0000Net_Zero': 'Net zero emissions' } };
+    await store.saveConfig(cfg);
+    const loaded = await store.loadConfig();
+    expect(loaded?.pollLabels).toEqual({ 'Topic\u0000Net_Zero': 'Net zero emissions' });
+  });
+});
+
+describe('store: deck migration', () => {
+  it('defaults pollOptions to [] for a deck saved before it existed', async () => {
+    const store = await freshStore();
+    const { pollOptions: _pollOptions, ...oldDeck } = fakeDeck();
+    await store.saveDeck(oldDeck as Deck);
+    const loaded = await store.loadDeck();
+    expect(loaded?.pollOptions).toEqual([]);
+  });
+
+  it('leaves an explicitly-set pollOptions array alone', async () => {
+    const store = await freshStore();
+    const pollOptions = [
+      {
+        slide: 1,
+        id: 'v1',
+        shapeName: 'VOTE_Mood_Happy',
+        poll: 'Mood',
+        choice: 'Happy',
+        kind: 'vote' as const,
+        label: 'Happy',
+        bounds: { x: 0, y: 0, w: 10, h: 10 },
+        linked: false,
+      },
+    ];
+    const deck = { ...fakeDeck(), pollOptions };
+    await store.saveDeck(deck);
+    const loaded = await store.loadDeck();
+    expect(loaded?.pollOptions).toEqual(pollOptions);
   });
 });
 

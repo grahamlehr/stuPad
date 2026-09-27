@@ -99,6 +99,77 @@ export function validateDeck(deck: Deck): Issue[] {
     }
   }
 
+  issues.push(...validatePollOptions(deck));
+
+  return issues;
+}
+
+/** A choice string that reads as a plain finite number, e.g. "4" or "3.5" (RATE_ choices). */
+function isNumericChoice(choice: string): boolean {
+  const trimmed = choice.trim();
+  return trimmed.length > 0 && Number.isFinite(Number(trimmed));
+}
+
+/**
+ * Poll/rating warnings (SPEC "PowerPoint template rules", ROADMAP "Polls and ratings"): a
+ * poll with only one option, the same choice used twice in one poll, a `RATE_` choice that
+ * doesn't parse as a number (left out of the mean, still counted), and a poll that mixes
+ * `VOTE_` and `RATE_` prefixes (treated as `'vote'` everywhere it's aggregated, see
+ * `src/report/stats.ts`).
+ */
+function validatePollOptions(deck: Deck): Issue[] {
+  const issues: Issue[] = [];
+  const byPoll = new Map<string, typeof deck.pollOptions>();
+  for (const opt of deck.pollOptions ?? []) {
+    const list = byPoll.get(opt.poll) ?? [];
+    list.push(opt);
+    byPoll.set(opt.poll, list);
+  }
+
+  for (const [poll, options] of byPoll) {
+    if (options.length === 1) {
+      issues.push({
+        severity: 'warning',
+        code: 'poll_single_option',
+        message: `Poll "${poll}" has only one option`,
+        slide: options[0].slide,
+      });
+    }
+
+    const seenChoices = new Map<string, number>();
+    for (const opt of options) {
+      seenChoices.set(opt.choice, (seenChoices.get(opt.choice) ?? 0) + 1);
+    }
+    for (const [choice, count] of seenChoices) {
+      if (count > 1) {
+        issues.push({
+          severity: 'warning',
+          code: 'poll_duplicate_choice',
+          message: `Poll "${poll}" has the choice "${choice}" more than once`,
+        });
+      }
+    }
+
+    if (options.some((o) => o.kind === 'vote') && options.some((o) => o.kind === 'rate')) {
+      issues.push({
+        severity: 'warning',
+        code: 'poll_mixed_kind',
+        message: `Poll "${poll}" mixes VOTE_ and RATE_ options; it will be treated as a vote`,
+      });
+    }
+
+    for (const opt of options) {
+      if (opt.kind === 'rate' && !isNumericChoice(opt.choice)) {
+        issues.push({
+          severity: 'warning',
+          code: 'poll_bad_rating',
+          message: `Poll "${poll}": rating choice "${opt.choice}" is not a number and will be left out of the mean`,
+          slide: opt.slide,
+        });
+      }
+    }
+  }
+
   return issues;
 }
 

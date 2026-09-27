@@ -866,6 +866,69 @@ export function drawSlideTimeChart(
   }
 }
 
+export interface PollChartBar {
+  label: string;
+  count: number;
+  /** 0..100 */
+  pct: number;
+  color: string;
+}
+
+export interface PollChartData {
+  bars: PollChartBar[];
+}
+
+/**
+ * Horizontal bar chart for one poll's results (ROADMAP "Polls and ratings" PDF page): one bar
+ * per choice, in the order the caller supplies (deck order; see `ReportStats.polls`), with
+ * both the raw count and its share of the poll's votes labelled at the end of the bar.
+ */
+export function drawPollChart(
+  ctx: CanvasRenderingContext2D | null,
+  width: number,
+  height: number,
+  data: PollChartData,
+  fontScale = 1,
+): void {
+  if (!ctx) return;
+  clearBg(ctx, width, height);
+  const { bars } = data;
+  if (bars.length === 0) {
+    ctx.fillStyle = MUTED_COLOR;
+    ctx.font = scaledFont(16, fontScale);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('No data', width / 2, height / 2);
+    return;
+  }
+
+  const labelW = Math.min(Math.max(width * 0.3, 100 * fontScale), width * 0.42);
+  const valueW = Math.max(110, 78 * fontScale);
+  const plotX = labelW;
+  const plotW = width - labelW - valueW;
+  const max = Math.max(1, ...bars.map((b) => b.count));
+  const rowH = height / bars.length;
+  const barH = Math.min(Math.max(28, 24 * fontScale), rowH * 0.6);
+
+  ctx.font = scaledFont(13, fontScale);
+  bars.forEach((b, i) => {
+    const y = i * rowH + rowH / 2;
+    ctx.fillStyle = TEXT_COLOR;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    const label = b.label.length > 24 ? `${b.label.slice(0, 23)}…` : b.label;
+    ctx.fillText(label, plotX - 10, y);
+
+    const w = (b.count / max) * plotW;
+    ctx.fillStyle = b.color;
+    ctx.fillRect(plotX, y - barH / 2, Math.max(1, w), barH);
+
+    ctx.fillStyle = MUTED_COLOR;
+    ctx.textAlign = 'left';
+    ctx.fillText(`${b.count} (${fmtPct(b.pct)})`, plotX + w + 8, y);
+  });
+}
+
 /**
  * A simple table of the most common paths through the deck: "3 → 4 → 5" style labels
  * (drawn on canvas, not `doc.text`, so the arrow glyph, which is outside jsPDF's built-in

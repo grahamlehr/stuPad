@@ -224,6 +224,42 @@ export interface BackLinkDef {
   bounds: Rect;
 }
 
+/**
+ * A `VOTE_<poll>_<choice>` or `RATE_<poll>_<choice>` shape (SPEC "PowerPoint template
+ * rules"): a poll or rating option that may sit on any slide, including the home slide.
+ * `poll` and `choice` are the raw, stable ids (as written in the shape name); a poll name
+ * can't contain underscores (the segment right after the prefix, up to the next `_`), but
+ * a choice name may (everything after that). `kind` reflects the shape's own prefix
+ * (`VOTE_` or `RATE_`, case-insensitive); when a poll mixes both prefixes across its
+ * options, callers (see `src/report/stats.ts`) treat the whole poll as `'vote'` and
+ * `validateDeck` raises a `poll_mixed_kind` warning — `kind` here is never rewritten.
+ */
+export interface PollOptionDef {
+  slide: number;
+  /** shape id (or the group's id, for a group named VOTE_/RATE_) */
+  id: string;
+  /** Selection Pane name, e.g. VOTE_Topic_Sustainability */
+  shapeName: string;
+  /** raw poll segment, e.g. "Topic" */
+  poll: string;
+  /** raw choice segment, e.g. "Net_Zero" (may contain underscores) */
+  choice: string;
+  kind: 'vote' | 'rate';
+  /** display label from the choice segment, prettified (underscores/hyphens to spaces) */
+  label: string;
+  bounds: Rect;
+  /** true when the shape (or its group) has any link, including a "Last Slide Viewed" back link */
+  linked: boolean;
+  /** set only when `linked` is a slide jump (undefined for an unlinked option or a back link) */
+  targetSlide?: number;
+}
+
+/** Builds the `KioskConfig.pollLabels` key for one poll choice; `\u0000` can't appear in a
+ * shape name, so this is unambiguous even though poll/choice names may contain punctuation. */
+export function pollLabelKey(poll: string, choice: string): string {
+  return `${poll}\u0000${choice}`;
+}
+
 export interface Deck {
   /** uuid assigned at parse time */
   id: string;
@@ -248,6 +284,11 @@ export interface Deck {
    * field existed won't have it; the store normalises a missing value to `[]`.
    */
   backLinks: BackLinkDef[];
+  /**
+   * Poll/rating options anywhere in the deck (see `PollOptionDef`). Decks stored before
+   * this field existed won't have it; the store normalises a missing value to `[]`.
+   */
+  pollOptions: PollOptionDef[];
   /** mediaKey -> media (images, rasters). Keys are zip paths like "ppt/media/image1.png" or "raster/3.png" */
   media: Record<string, MediaItem>;
   /** font families used in the deck */
@@ -268,7 +309,11 @@ export interface Issue {
     | 'no_home_link'
     | 'too_large'
     | 'small_button'
-    | 'self_link';
+    | 'self_link'
+    | 'poll_single_option'
+    | 'poll_duplicate_choice'
+    | 'poll_bad_rating'
+    | 'poll_mixed_kind';
   message: string;
   slide?: number;
 }
@@ -288,6 +333,12 @@ export interface KioskConfig {
   sessionName: string;
   /** buttonId -> admin-edited label */
   buttonLabels: Record<string, string>;
+  /**
+   * Admin-renamed poll/rating choice labels, keyed by `pollLabelKey(poll, choice)`. Configs
+   * saved before this field existed won't have it; the store normalises a missing value to
+   * `{}`. Reset to `{}` whenever a new deck is loaded, like `buttonLabels`.
+   */
+  pollLabels: Record<string, string>;
   /** seconds, 5..300; null = off */
   timeoutSec: number | null;
   returnMethods: { homeButton: boolean; tapAnywhere: boolean; timeout: boolean };
@@ -365,6 +416,7 @@ export function defaultConfig(fileName: string, now = new Date()): KioskConfig {
   return {
     sessionName: `${fileName.replace(/\.pptx$/i, '')} ${date}`,
     buttonLabels: {},
+    pollLabels: {},
     timeoutSec: 20,
     returnMethods: { homeButton: true, tapAnywhere: false, timeout: true },
     idleWarning: false,
@@ -404,7 +456,8 @@ export type EventType =
   | 'slide_nav'
   | 'heartbeat'
   | 'attract_start'
-  | 'attract_end';
+  | 'attract_end'
+  | 'vote';
 
 export type ReturnMethod = 'home_button' | 'tap' | 'timeout';
 
@@ -426,11 +479,15 @@ export interface LogEvent {
   /** % of slide width/height, miss taps only */
   x?: number;
   y?: number;
+  /** poll name, `vote` events only */
+  poll?: string;
+  /** choice name, `vote` events only */
+  choice?: string;
 }
 
 export const CSV_COLUMNS = [
   'id', 'ts', 'session_id', 'visit_id', 'event', 'button_id', 'button_label',
-  'slide_from', 'slide_to', 'method', 'dwell_ms', 'x', 'y',
+  'slide_from', 'slide_to', 'method', 'dwell_ms', 'x', 'y', 'poll', 'choice',
 ] as const;
 
 export interface EventFilter {

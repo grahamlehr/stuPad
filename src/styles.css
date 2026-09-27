@@ -370,6 +370,19 @@ h3 {
   padding: 2px 8px;
 }
 
+/* Poll/rating options (ROADMAP "Polls and ratings"): dashed, in the accent colour, so they
+   read as distinct from a plain button/nav-link outline even when they overlap one (a linked
+   home vote is both). */
+.preview-poll-outline {
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+.preview-poll-outline .preview-btn-label {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
 .thumb-grid {
   display: grid;
   /* thumbnails render at a fixed 160px wide (+2px border each side), so size cards to match */
@@ -843,5 +856,34 @@ input[type='range'] {
   .kiosk-attract-pulse .kiosk-attract-pulse-layer {
     animation: none;
     opacity: 1;
+  }
+}
+
+/* Poll/rating "Thanks" overlay (src/kiosk/index.ts showThanks): built once lazily and left in
+   the DOM; only this class and its opacity are toggled, so a vote never rebuilds DOM. */
+.kiosk-poll-thanks {
+  position: absolute;
+  left: 50%;
+  bottom: 8%;
+  transform: translateX(-50%);
+  padding: 14px 28px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 28px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease-in-out;
+}
+
+.kiosk-poll-thanks--visible {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kiosk-poll-thanks {
+    transition: none;
   }
 }

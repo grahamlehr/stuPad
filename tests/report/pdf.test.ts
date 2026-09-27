@@ -52,6 +52,7 @@ function makeDeck(buttonIds: string[]): Deck {
     homeLinks: [],
   navLinks: [],
   backLinks: [],
+  pollOptions: [],
     media: {},
     fonts: [],
   };
@@ -326,5 +327,80 @@ describe('buildPdf: uptime tile and device name', () => {
     const blob = await buildPdf([], deck, config);
     const text = await extractPdfText(blob);
     expect(text).not.toMatch(/·\s*·/);
+  });
+});
+
+describe('buildPdf: polls and ratings', () => {
+  function pollsDeck(): Deck {
+    return {
+      ...makeDeck(['b1']),
+      pollOptions: [
+        { slide: 1, id: 'v1', shapeName: 'VOTE_Mood_Happy', poll: 'Mood', choice: 'Happy', kind: 'vote', label: 'Happy', bounds: { x: 0, y: 0, w: 10, h: 10 }, linked: false },
+        { slide: 1, id: 'v2', shapeName: 'VOTE_Mood_Sad', poll: 'Mood', choice: 'Sad', kind: 'vote', label: 'Sad', bounds: { x: 0, y: 0, w: 10, h: 10 }, linked: false },
+        { slide: 2, id: 'r1', shapeName: 'RATE_Stand_4', poll: 'Stand', choice: '4', kind: 'rate', label: '4', bounds: { x: 0, y: 0, w: 10, h: 10 }, linked: false },
+      ],
+    };
+  }
+
+  it('shows the Interactions tile only when the log has vote events', async () => {
+    const deck = pollsDeck();
+    const config = defaultConfig('demo.pptx');
+    const withoutVotes: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', visit_id: 'v1', event: 'button_press', button_id: 'b1', button_label: 'A' },
+      { ts: '2026-10-14T09:00:10.000+00:00', session_id: 's1', visit_id: 'v1', event: 'return_home', method: 'tap', dwell_ms: 10000 },
+    ];
+    const withVotes: LogEvent[] = [
+      ...withoutVotes,
+      { ts: '2026-10-14T09:00:20.000+00:00', session_id: 's1', event: 'vote', poll: 'Mood', choice: 'Happy', slide_from: 1 },
+    ];
+
+    const noVotesBlob = await buildPdf(withoutVotes, deck, config);
+    expect(await extractPdfText(noVotesBlob)).not.toContain('Interactions');
+
+    const withVotesBlob = await buildPdf(withVotes, deck, config);
+    expect(await extractPdfText(withVotesBlob)).toContain('Interactions');
+  });
+
+  it('adds a Poll results page per poll with at least one vote, and none for a poll with zero votes', async () => {
+    const deck = pollsDeck();
+    const config = defaultConfig('demo.pptx');
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', event: 'vote', poll: 'Mood', choice: 'Happy', slide_from: 1 },
+      { ts: '2026-10-14T09:00:05.000+00:00', session_id: 's1', event: 'vote', poll: 'Mood', choice: 'Sad', slide_from: 1 },
+    ];
+    // No onward nav taps and no miss taps: Summary, Button share, Activity over time, Return
+    // behaviour (4 pages), plus one Poll results page for Mood (Stand has zero votes: no page).
+    const blob = await buildPdf(events, deck, config);
+    expect(await countPdfPages(blob)).toBe(5);
+    const text = await extractPdfText(blob);
+    expect(text).toContain('Poll results: Mood');
+    expect(text).not.toContain('Poll results: Stand');
+  });
+
+  it('shows the mean score for a rate poll, over numeric choices only', async () => {
+    const deck = pollsDeck();
+    const config = defaultConfig('demo.pptx');
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', event: 'vote', poll: 'Stand', choice: '4', slide_from: 2 },
+      { ts: '2026-10-14T09:00:05.000+00:00', session_id: 's1', event: 'vote', poll: 'Stand', choice: '4', slide_from: 2 },
+    ];
+    const blob = await buildPdf(events, deck, config);
+    const text = await extractPdfText(blob);
+    expect(text).toContain('Poll results: Stand');
+    expect(text).toContain('Mean score 4.0');
+  });
+
+  it('honours an admin-renamed poll choice label (KioskConfig.pollLabels)', async () => {
+    const deck = pollsDeck();
+    const config = { ...defaultConfig('demo.pptx'), pollLabels: { 'Mood\u0000Happy': 'Delighted' } };
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', event: 'vote', poll: 'Mood', choice: 'Happy', slide_from: 1 },
+    ];
+    const blob = await buildPdf(events, deck, config);
+    const text = await extractPdfText(blob);
+    // The renamed label is drawn on canvas (mocked to a no-op here), not with doc.text, so this
+    // only exercises the call path without throwing; computeStats itself is covered in
+    // tests/report/stats.test.ts.
+    expect(text).toContain('Poll results: Mood');
   });
 });

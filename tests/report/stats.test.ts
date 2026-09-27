@@ -908,6 +908,173 @@ function attractEnd(ts: string, dwellMs: number): LogEvent {
   return { ts, session_id: SID, event: 'attract_end', dwell_ms: dwellMs };
 }
 
+function vote(ts: string, poll: string, choice: string, opts: Partial<LogEvent> = {}): LogEvent {
+  return {
+    ts,
+    session_id: SID,
+    event: 'vote',
+    poll,
+    choice,
+    slide_from: 1,
+    ...opts,
+  };
+}
+
+describe('computeStats: polls and ratings', () => {
+  it('empty log has zero homeVotes/interactions and no polls without deck metadata', () => {
+    const stats = computeStats([], {});
+    expect(stats.homeVotes).toBe(0);
+    expect(stats.interactions).toBe(0);
+    expect(stats.polls).toEqual([]);
+  });
+
+  it('counts a home-slide vote (no visit_id) as homeVotes and as an interaction, but not a visit', () => {
+    const events: LogEvent[] = [vote('2026-10-14T09:00:00.000+00:00', 'Mood', 'Happy')];
+    const stats = computeStats(events, {});
+    expect(stats.homeVotes).toBe(1);
+    expect(stats.totalVisits).toBe(0);
+    expect(stats.interactions).toBe(1);
+  });
+
+  it('a destination-slide vote (with visit_id) is not a homeVote, and interactions come from totalVisits', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T09:00:00.000+00:00', { visit_id: 'v1', slide_to: 2 }),
+      vote('2026-10-14T09:00:05.000+00:00', 'Stand', '4', { visit_id: 'v1', slide_from: 2 }),
+      ret('2026-10-14T09:00:10.000+00:00', { visit_id: 'v1', method: 'home_button', dwell_ms: 10_000 }),
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+    expect(stats.homeVotes).toBe(0);
+    expect(stats.totalVisits).toBe(1);
+    expect(stats.interactions).toBe(1); // the one real visit, not counted twice for its vote
+  });
+
+  it('every vote counts toward a poll total, home and visit votes alike', () => {
+    const events: LogEvent[] = [
+      vote('2026-10-14T09:00:00.000+00:00', 'Mood', 'Happy'),
+      vote('2026-10-14T09:00:01.000+00:00', 'Mood', 'Happy'),
+      vote('2026-10-14T09:00:02.000+00:00', 'Mood', 'Sad'),
+    ];
+    const stats = computeStats(events, {}, {
+      pollOptions: [
+        { poll: 'Mood', choice: 'Happy', kind: 'vote', label: 'Happy' },
+        { poll: 'Mood', choice: 'Sad', kind: 'vote', label: 'Sad' },
+      ],
+    });
+    expect(stats.polls).toHaveLength(1);
+    const mood = stats.polls[0];
+    expect(mood.poll).toBe('Mood');
+    expect(mood.kind).toBe('vote');
+    expect(mood.total).toBe(3);
+    expect(mood.choices).toEqual([
+      { choice: 'Happy', label: 'Happy', count: 2, pct: (2 / 3) * 100 },
+      { choice: 'Sad', label: 'Sad', count: 1, pct: (1 / 3) * 100 },
+    ]);
+    expect(mood.mean).toBeNull();
+  });
+
+  it('orders polls and choices by the deck order given in opts.pollOptions, not first-seen in events', () => {
+    const events: LogEvent[] = [
+      vote('2026-10-14T09:00:00.000+00:00', 'Second', 'B'),
+      vote('2026-10-14T09:00:01.000+00:00', 'First', 'Y'),
+      vote('2026-10-14T09:00:02.000+00:00', 'First', 'X'),
+    ];
+    const stats = computeStats(events, {}, {
+      pollOptions: [
+        { poll: 'First', choice: 'X', kind: 'vote', label: 'X' },
+        { poll: 'First', choice: 'Y', kind: 'vote', label: 'Y' },
+        { poll: 'Second', choice: 'A', kind: 'vote', label: 'A' },
+        { poll: 'Second', choice: 'B', kind: 'vote', label: 'B' },
+      ],
+    });
+    expect(stats.polls.map((p) => p.poll)).toEqual(['First', 'Second']);
+    expect(stats.polls[0].choices.map((c) => c.choice)).toEqual(['X', 'Y']);
+    // Second's choice A got no votes but still appears (deck order), with count 0.
+    expect(stats.polls[1].choices).toEqual([
+      { choice: 'A', label: 'A', count: 0, pct: 0 },
+      { choice: 'B', label: 'B', count: 1, pct: 100 },
+    ]);
+  });
+
+  it('falls back to first-seen order and the raw choice as its label with no deck metadata', () => {
+    const events: LogEvent[] = [
+      vote('2026-10-14T09:00:00.000+00:00', 'Extra', 'Yes'),
+      vote('2026-10-14T09:00:01.000+00:00', 'Extra', 'No'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.polls).toHaveLength(1);
+    expect(stats.polls[0].choices.map((c) => c.label)).toEqual(['Yes', 'No']);
+  });
+
+  it('resolves a poll as "rate" only when every deck option for it is "rate"', () => {
+    const events: LogEvent[] = [
+      vote('2026-10-14T09:00:00.000+00:00', 'Stand', '3'),
+      vote('2026-10-14T09:00:01.000+00:00', 'Mixed', 'A'),
+      vote('2026-10-14T09:00:02.000+00:00', 'Mixed', '4'),
+    ];
+    const stats = computeStats(events, {}, {
+      pollOptions: [
+        { poll: 'Stand', choice: '3', kind: 'rate', label: '3' },
+        { poll: 'Stand', choice: '4', kind: 'rate', label: '4' },
+        { poll: 'Mixed', choice: 'A', kind: 'vote', label: 'A' },
+        { poll: 'Mixed', choice: '4', kind: 'rate', label: '4' },
+      ],
+    });
+    const stand = stats.polls.find((p) => p.poll === 'Stand')!;
+    const mixed = stats.polls.find((p) => p.poll === 'Mixed')!;
+    expect(stand.kind).toBe('rate');
+    expect(mixed.kind).toBe('vote'); // mixing VOTE_/RATE_ is 'vote' everywhere it's aggregated
+    expect(mixed.mean).toBeNull();
+  });
+
+  it('computes the mean of a rate poll over numeric choices, ignoring non-numeric ones', () => {
+    const events: LogEvent[] = [
+      vote('2026-10-14T09:00:00.000+00:00', 'Stand', '2'),
+      vote('2026-10-14T09:00:01.000+00:00', 'Stand', '4'),
+      vote('2026-10-14T09:00:02.000+00:00', 'Stand', '4'),
+      vote('2026-10-14T09:00:03.000+00:00', 'Stand', 'oops'), // non-numeric: counted, excluded from the mean
+    ];
+    const stats = computeStats(events, {}, {
+      pollOptions: [
+        { poll: 'Stand', choice: '1', kind: 'rate', label: '1' },
+        { poll: 'Stand', choice: '2', kind: 'rate', label: '2' },
+        { poll: 'Stand', choice: '3', kind: 'rate', label: '3' },
+        { poll: 'Stand', choice: '4', kind: 'rate', label: '4' },
+        { poll: 'Stand', choice: '5', kind: 'rate', label: '5' },
+      ],
+    });
+    const stand = stats.polls.find((p) => p.poll === 'Stand')!;
+    expect(stand.total).toBe(4); // every vote counts, including the non-numeric one
+    expect(stand.mean).toBeCloseTo((2 + 4 + 4) / 3);
+  });
+
+  it('an admin-renamed choice label (KioskConfig.pollLabels) overrides the deck default', () => {
+    const events: LogEvent[] = [vote('2026-10-14T09:00:00.000+00:00', 'Topic', 'Net_Zero')];
+    const stats = computeStats(events, {}, {
+      pollOptions: [{ poll: 'Topic', choice: 'Net_Zero', kind: 'vote', label: 'Net Zero' }],
+      pollLabels: { 'Topic\u0000Net_Zero': 'Carbon neutrality' },
+    });
+    expect(stats.polls[0].choices[0].label).toBe('Carbon neutrality');
+  });
+});
+
+describe('computeStats: vote events do not disturb visitPaths (feature C)', () => {
+  it('a destination-slide vote inside a visit does not affect its slide time or path', () => {
+    const withVote: LogEvent[] = [
+      press('b1', '2026-10-14T09:00:00.000+00:00', { visit_id: 'v1', slide_to: 2 }),
+      vote('2026-10-14T09:00:05.000+00:00', 'Stand', '4', { visit_id: 'v1', slide_from: 2 }),
+      nav('2026-10-14T09:00:10.000+00:00', { visit_id: 'v1', slide_from: 2, slide_to: 3, dwell_ms: 10_000 }),
+      ret('2026-10-14T09:00:20.000+00:00', { visit_id: 'v1', slide_from: 3, method: 'home_button', dwell_ms: 20_000 }),
+    ];
+    const withoutVote = withVote.filter((e) => e.event !== 'vote');
+
+    const statsWithVote = computeStats(withVote, { b1: 'A' });
+    const statsWithoutVote = computeStats(withoutVote, { b1: 'A' });
+    expect(statsWithVote.slideTime).toEqual(statsWithoutVote.slideTime);
+    expect(statsWithVote.topPaths).toEqual(statsWithoutVote.topPaths);
+    expect(statsWithVote.totalPaths).toEqual(statsWithoutVote.totalPaths);
+  });
+});
+
 describe('computeStats: attract loop', () => {
   it('empty log has zero attract counts and a null pull-in pct', () => {
     const stats = computeStats([], {});

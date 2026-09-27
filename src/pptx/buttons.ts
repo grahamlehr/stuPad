@@ -1,4 +1,4 @@
-import type { BackLinkDef, ButtonDef, HomeLinkDef, NavLinkDef, SlideElement, SlideLink, Rect, Issue } from '../types';
+import type { BackLinkDef, ButtonDef, HomeLinkDef, NavLinkDef, PollOptionDef, SlideElement, SlideLink, Rect, Issue } from '../types';
 
 const DEFAULT_NAME_RE = /^(rectangle|oval|textbox|text box|group|rounded rectangle|picture|straight connector|elbow connector|freeform|shape|line|isoceles triangle|arrow|chevron|speech bubble|title|subtitle)\s*\d*$/i;
 const GOOGLE_SHAPE_RE = /^google shape;/i;
@@ -139,6 +139,51 @@ export function detectNavLinks(slideIndex: number, elements: SlideElement[], iss
       targetSlide: link.targetSlide,
       bounds: boundsOf(el),
     });
+  }
+  return out;
+}
+
+/**
+ * `VOTE_<poll>_<choice>` / `RATE_<poll>_<choice>`, case-insensitive prefix. The poll segment
+ * (`[^_]+`) can't contain underscores; the choice segment (`.+`) can. A trimmed shape name
+ * that doesn't match this at all is not a poll option.
+ */
+const POLL_NAME_RE = /^(vote|rate)_([^_]+)_(.+)$/i;
+
+/**
+ * Detect `VOTE_`/`RATE_` shapes anywhere in the deck (SPEC "PowerPoint template rules"; see
+ * `PollOptionDef`). Unlike buttons/nav links, poll options aren't restricted to the home
+ * slide or destination slides — a poll can sit anywhere, including slide 1 alongside
+ * buttons. A group named `VOTE_.../RATE_...` is one option (its own bounds; children are
+ * not also listed). `kind` is always the shape's own prefix, even when a poll mixes
+ * `VOTE_`/`RATE_` across its options — `validateDeck` raises `poll_mixed_kind` for that, and
+ * report code (see `src/report/stats.ts`) decides the poll's overall kind from every option.
+ */
+export function detectPollOptions(slides: { index: number; elements: SlideElement[] }[]): PollOptionDef[] {
+  const out: PollOptionDef[] = [];
+  for (const slide of slides) {
+    for (const el of slide.elements) {
+      if (el.hidden) continue;
+      const name = (el.name ?? '').trim();
+      const m = POLL_NAME_RE.exec(name);
+      if (!m) continue;
+      const kind: 'vote' | 'rate' = m[1].toLowerCase() === 'rate' ? 'rate' : 'vote';
+      const poll = m[2];
+      const choice = m[3];
+      const link = findLink(el);
+      out.push({
+        slide: slide.index,
+        id: el.id,
+        shapeName: name,
+        poll,
+        choice,
+        kind,
+        label: prettyName(choice),
+        bounds: boundsOf(el),
+        linked: !!link,
+        targetSlide: link && !link.back ? link.targetSlide : undefined,
+      });
+    }
   }
   return out;
 }

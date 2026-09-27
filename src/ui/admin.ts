@@ -3,6 +3,7 @@
  * Reached via the secret sequence (+ optional PIN) from kiosk mode.
  */
 import type { Deck, KioskConfig } from '../types';
+import type { PollOptionMeta } from '../report';
 import { getEvents, countEvents, clearEvents } from '../store';
 import { computeStats, toCsv, csvFileName, pdfFileName, buildPdf, exportFile } from '../report';
 import { rasterizeSlide } from '../render';
@@ -46,11 +47,18 @@ export class AdminPanel {
     return labels;
   }
 
+  private pollOptions(): PollOptionMeta[] {
+    return (this.deps.deck.pollOptions ?? []).map((p) => ({ poll: p.poll, choice: p.choice, kind: p.kind, label: p.label }));
+  }
+
   private async render(): Promise<void> {
     clear(this.root);
 
     const sessionEvents = await getEvents({ sessionId: this.deps.sessionId });
-    const stats = computeStats(sessionEvents, this.labels());
+    const stats = computeStats(sessionEvents, this.labels(), {
+      pollOptions: this.pollOptions(),
+      pollLabels: this.deps.config.pollLabels,
+    });
     const totalCount = await countEvents();
 
     let usageText = '';

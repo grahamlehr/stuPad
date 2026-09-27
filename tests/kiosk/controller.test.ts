@@ -81,6 +81,7 @@ function fakeDeck(): Deck {
     homeLinks: [{ slide: 2, id: 'h1', bounds: { x: 300, y: 300, w: 100, h: 60 } }],
     navLinks: [],
     backLinks: [],
+    pollOptions: [],
     media: {},
     fonts: [],
   };
@@ -830,6 +831,230 @@ describe('KioskController: attract loop', () => {
     controller.stop();
     expect(vi.getTimerCount()).toBe(0);
     expect(root.classList.contains('kiosk-attract-pulse')).toBe(false);
+  });
+});
+
+describe('KioskController: polls and ratings', () => {
+  let root: HTMLElement;
+  let logs: Omit<LogEvent, 'ts' | 'session_id'>[];
+  let onAdminRequested: Mock<() => void>;
+  let controller: InstanceType<typeof KioskController>;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    logs = [];
+    onAdminRequested = vi.fn<() => void>();
+  });
+
+  afterEach(() => {
+    controller?.stop();
+    root.remove();
+    vi.useRealTimers();
+  });
+
+  /**
+   * A deck with: two home buttons (b1 -> slide 2, b2 -> slide 5, b2 doubling as a linked
+   * VOTE_Topic_Zero option); an unlinked VOTE_Mood_Happy option on Home; on slide 2, an
+   * unlinked RATE_Stand_3 option and a VOTE_Extra_Yes option that is also a nav link to
+   * slide 6 (so a linked destination vote can be exercised without a second button).
+   */
+  function pollDeck(): Deck {
+    const deck = fakeDeck();
+    deck.buttons.push({
+      id: 'b2',
+      shapeName: 'BTN_2',
+      text: 'Button 2',
+      defaultLabel: 'Button 2',
+      targetSlide: 5,
+      bounds: { x: 700, y: 100, w: 200, h: 100 },
+    });
+    deck.navLinks = [
+      {
+        slide: 2,
+        id: 'nav1',
+        shapeName: 'VOTE_Extra_Yes',
+        label: 'Yes',
+        targetSlide: 6,
+        bounds: { x: 800, y: 800, w: 100, h: 60 },
+      },
+    ];
+    deck.pollOptions = [
+      {
+        slide: 1,
+        id: 'v-mood',
+        shapeName: 'VOTE_Mood_Happy',
+        poll: 'Mood',
+        choice: 'Happy',
+        kind: 'vote',
+        label: 'Happy',
+        bounds: { x: 700, y: 700, w: 100, h: 60 },
+        linked: false,
+      },
+      {
+        slide: 1,
+        id: 'b2',
+        shapeName: 'VOTE_Topic_Zero',
+        poll: 'Topic',
+        choice: 'Zero',
+        kind: 'vote',
+        label: 'Zero',
+        bounds: { x: 700, y: 100, w: 200, h: 100 },
+        linked: true,
+        targetSlide: 5,
+      },
+      {
+        slide: 2,
+        id: 'v-rate',
+        shapeName: 'RATE_Stand_3',
+        poll: 'Stand',
+        choice: '3',
+        kind: 'rate',
+        label: '3',
+        bounds: { x: 500, y: 500, w: 100, h: 60 },
+        linked: false,
+      },
+      {
+        slide: 2,
+        id: 'nav1',
+        shapeName: 'VOTE_Extra_Yes',
+        poll: 'Extra',
+        choice: 'Yes',
+        kind: 'vote',
+        label: 'Yes',
+        bounds: { x: 800, y: 800, w: 100, h: 60 },
+        linked: true,
+        targetSlide: 6,
+      },
+    ];
+    return deck;
+  }
+
+  async function makePollController(cfgOver: Partial<KioskConfig> = {}): Promise<InstanceType<typeof KioskController>> {
+    controller = new KioskController({
+      root,
+      deck: pollDeck(),
+      config: fakeConfig(cfgOver),
+      sessionId: 'sess-1',
+      log: (e) => logs.push(e),
+      onAdminRequested,
+    });
+    await controller.start();
+    return controller;
+  }
+
+  it('logs a destination vote once per visit per poll; a repeat tap in the same visit logs nothing', async () => {
+    await makePollController();
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // b1 -> slide 2
+    logs.length = 0;
+
+    vi.advanceTimersByTime(150);
+    tap(root, 550, 530); // inside v-rate's bounds (500,500,100,60)
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ event: 'vote', poll: 'Stand', choice: '3', slide_from: 2 });
+    expect(logs[0].visit_id).toBeTruthy();
+
+    logs.length = 0;
+    vi.advanceTimersByTime(150);
+    tap(root, 550, 530); // repeat tap, same visit, same poll: not logged
+    expect(logs).toHaveLength(0);
+  });
+
+  it('a new visit can vote in the same poll again', async () => {
+    await makePollController();
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2
+    vi.advanceTimersByTime(150);
+    tap(root, 550, 530); // vote
+    vi.advanceTimersByTime(150);
+    tap(root, HOME_LINK_POINT.x, HOME_LINK_POINT.y); // return home, ends the visit
+    logs.length = 0;
+
+    vi.advanceTimersByTime(150);
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // a new visit -> slide 2 again
+    vi.advanceTimersByTime(150);
+    tap(root, 550, 530); // votes again, in the new visit
+
+    expect(logs.filter((l) => l.event === 'vote')).toHaveLength(1);
+  });
+
+  it('a linked destination vote logs vote then slide_nav, in that order, and the link is still followed', async () => {
+    await makePollController();
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2
+    logs.length = 0;
+
+    vi.advanceTimersByTime(150);
+    tap(root, 850, 830); // inside nav1's bounds (800,800,100,60), linked to slide 6
+
+    expect(logs.map((l) => l.event)).toEqual(['vote', 'slide_nav']);
+    expect(logs[0]).toMatchObject({ poll: 'Extra', choice: 'Yes', slide_from: 2 });
+    expect(logs[1]).toMatchObject({ event: 'slide_nav', slide_from: 2, slide_to: 6 });
+    expect(lastStage!.showCalls.at(-1)?.index).toBe(6);
+  });
+
+  it('home unlinked vote logs vote with no visit_id and never a miss_tap; cooldown suppresses a repeat within 3s and allows one after', async () => {
+    await makePollController();
+    logs.length = 0;
+    tap(root, 750, 730); // inside v-mood's bounds (700,700,100,60)
+
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ event: 'vote', poll: 'Mood', choice: 'Happy', slide_from: 1 });
+    expect(logs[0].visit_id).toBeUndefined();
+
+    logs.length = 0;
+    vi.advanceTimersByTime(150); // past the 100ms debounce, still inside the 3s cooldown
+    tap(root, 750, 730);
+    expect(logs).toHaveLength(0);
+    expect(logs.some((l) => l.event === 'miss_tap')).toBe(false);
+
+    vi.advanceTimersByTime(3000); // now past the cooldown (3150ms since the first vote)
+    tap(root, 750, 730);
+    expect(logs.filter((l) => l.event === 'vote')).toHaveLength(1);
+  });
+
+  it('home linked vote logs button_press then vote with the same visit_id', async () => {
+    await makePollController();
+    logs.length = 0;
+    tap(root, 800, 150); // inside b2's bounds (700,100,200,100), also VOTE_Topic_Zero
+
+    expect(logs.map((l) => l.event)).toEqual(['button_press', 'vote']);
+    expect(logs[0]).toMatchObject({ button_id: 'b2', slide_to: 5 });
+    expect(logs[1]).toMatchObject({ poll: 'Topic', choice: 'Zero', slide_from: 1 });
+    expect(logs[0].visit_id).toBeTruthy();
+    expect(logs[1].visit_id).toBe(logs[0].visit_id);
+  });
+
+  it('attract wake tap on a vote shape logs no vote', async () => {
+    await makePollController({ attract: { enabled: true, idleSec: 5, mode: 'pulse', slides: [], slideSec: 4 } });
+    vi.advanceTimersByTime(5000); // idle -> attract_start
+    logs.length = 0;
+
+    tap(root, 750, 730); // sits inside v-mood's bounds, would be a vote on a normal Home tap
+
+    expect(logs.map((l) => l.event)).toEqual(['attract_end']);
+  });
+
+  it('shows the Thanks overlay on an unlinked vote and hides it after its own timer', async () => {
+    await makePollController();
+    tap(root, 750, 730); // home unlinked vote
+
+    const thanks = lastStage!.overlay.querySelector('.kiosk-poll-thanks') as HTMLElement | null;
+    expect(thanks).not.toBeNull();
+    expect(thanks!.classList.contains('kiosk-poll-thanks--visible')).toBe(true);
+
+    vi.advanceTimersByTime(1499);
+    expect(thanks!.classList.contains('kiosk-poll-thanks--visible')).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(thanks!.classList.contains('kiosk-poll-thanks--visible')).toBe(false);
+  });
+
+  it('stop() clears a pending Thanks timer, leaving nothing pending', async () => {
+    await makePollController();
+    tap(root, 750, 730); // shows Thanks and starts its timer
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    controller.stop();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

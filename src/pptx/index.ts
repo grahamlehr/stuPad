@@ -1,7 +1,7 @@
 import type { ParseResult, Issue } from '../types';
 import { Pkg } from './zip';
 import { loadDeck } from './deck';
-import { detectBackLinks, detectButtons, detectHomeLinks, detectNavLinks } from './buttons';
+import { detectBackLinks, detectButtons, detectHomeLinks, detectNavLinks, detectPollOptions } from './buttons';
 import { validateDeckAndSize } from './validate';
 
 export { KNOWN_FONTS } from './fonts';
@@ -56,6 +56,7 @@ export async function parsePptx(input: Blob | ArrayBuffer, fileName: string): Pr
   deck.navLinks = navLinks;
   deck.backLinks = backLinks;
   issues.push(...navLinkIssues);
+  deck.pollOptions = detectPollOptions(deck.slides);
 
   const validationIssues = validateDeckAndSize(deck, sizeBytes);
 
