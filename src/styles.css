@@ -213,8 +213,32 @@ h3 {
   padding: 32px 20px 80px;
 }
 
+.setup-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin-bottom: 12px;
+}
+
 .setup-header h1 {
-  margin: 0 0 12px;
+  margin: 0;
+}
+
+/* The lockup files carry transparent padding (about 13.4% of the width on every side), so
+   negative margins pull the visible mark flush right and keep the row as tall as the heading. */
+.setup-logo {
+  --logo-w: 178px;
+  display: block;
+  flex: none;
+  margin: calc(var(--logo-w) * -0.134) calc(var(--logo-w) * -0.134) calc(var(--logo-w) * -0.134) auto;
+}
+
+.setup-logo img {
+  display: block;
+  width: var(--logo-w);
+  height: auto;
 }
 
 .setup-sub {

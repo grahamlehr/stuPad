@@ -157,7 +157,7 @@ Details that matter:
 No framework; `ui/dom.ts` provides `h(tag, props, children)`, `clear`, `debounce`, `fmtBytes`.
 
 - **`main.ts` `App`** is the router and owner of the session. It holds `deck`, `config`, `sessionId`, the `KioskController`, and creates the fixed `.kiosk-root` element. `log()` stamps `ts` (`isoLocal`) and `session_id` and appends to the store. Admin, PIN pad and setup are overlays/screens it mounts and destroys. It also logs `app_resume` when the page becomes visible in kiosk mode.
-- **`ui/setup.ts` `SetupScreen`**: the five-step admin screen described in section 2.
+- **`ui/setup.ts` `SetupScreen`**: the five-step admin screen described in section 2. Its header puts the Emota lockup (`public/emota-logo-white.png` and `emota-logo-blackberry.png`, swapped by a `<picture>` media query on `prefers-color-scheme`) right-aligned beside the title; negative margins in `.setup-logo` cancel the files' transparent padding.
 - **`ui/admin.ts` `AdminPanel`**: session stat tiles, export scope (session / date range / all) with a live event count, CSV and PDF export, Clear log behind typing `CLEAR`, and Clear previous data.
 - **`ui/clear-data.ts`**: the "Clear previous data" confirmation dialog shared by Setup (Load step) and the admin panel. On confirm, `App.clearAll()` in `main.ts` stops the kiosk and tears down the mounted screen (cancelling Setup's pending autosave so the old deck isn't saved again), calls `clearAllData`, then reloads the page so no in-memory deck, fonts or object URLs survive.
 - **`ui/pinpad.ts` + `pinpad-logic.ts`**: numeric PIN overlay; three wrong attempts or 30 s idle returns to the kiosk. Wrong attempts log `admin_unlock_fail`.
