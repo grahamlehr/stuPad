@@ -114,7 +114,8 @@ export class SetupScreen {
     clear(this.root);
     this.root.append(
       h('header', { class: 'setup-header' }, [
-        h('h1', {}, ['GGPad v1.2 setup']),
+        h('h1', {}, ['GGPad setup']),
+        h('p', { class: 'setup-version' }, [`v${import.meta.env.VITE_APP_VERSION}`]),
         h('p', { class: 'setup-sub' }, ['Load linked PowerPoint, configure the kiosk, go live, run reports.']),
       ]),
       this.renderLoadStep(),

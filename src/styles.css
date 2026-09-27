@@ -144,7 +144,13 @@ a {
 }
 
 .setup-header h1 {
-  margin: 0 0 4px;
+  margin: 0;
+}
+
+.setup-version {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 2px 0 8px;
 }
 
 .setup-sub {
