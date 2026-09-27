@@ -141,7 +141,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 - Setup: poll options appear outlined in the preview; labels can be renamed like buttons.
 - PDF: page "Poll results" per poll: bar chart of choices with counts and %. For `RATE_` polls, add the mean score.
 - Tests: name parsing (underscores in choice names), vote once per visit, link-then-navigate, CSV columns.
-- Open (decision 5 below): whether a home-slide vote with no link should count as a "visit" for the Button share page. The proposal is no.
+- Stats (decision 4): a home-slide vote with no link is not a visit, because it has no destination, dwell or return. `computeStats` adds `homeVotes` and `interactions` (visits plus home-slide votes without a link). Summary shows an "Interactions" tile as the headline engagement count, and Poll results counts every vote. Visits, average dwell, Return behaviour and Button share count real visits only, so their totals stay consistent. A vote shape with a link starts a normal visit and counts once, as that visit.
 
 ## H. Video on destination slides (item 8)
 
@@ -169,11 +169,8 @@ Agreed Sep 27, 2026:
 1. **Attract loop:** the tap that ends the loop only wakes the kiosk and never presses a button, even when the loop is showing Home.
 2. **Polls:** one vote per poll per visit; repeat taps in the same visit are not logged.
 3. **Video:** always muted. The return-to-home timeout pauses while a video plays.
+4. **Home-slide votes:** a vote on Home with no link is counted as an interaction (a new Summary headline: visits plus these votes) and on Poll results, but not as a visit, so dwell, return behaviour and Button share stay consistent.
 
 Waiting on:
 
-4. **Embedded fonts:** Graham is finding a deck with an embedded font for the E0 spike. E1 can start once one sample is in hand; more samples (PowerPoint for Windows, Mac and web) would settle whether E2 is needed.
-
-Still open (small, can be settled in the PR):
-
-5. **Polls:** should a home-slide vote with no link count as a visit on the Button share page? The proposal is no.
+5. **Embedded fonts:** Graham is finding a deck with an embedded font for the E0 spike. E1 can start once one sample is in hand; more samples (PowerPoint for Windows, Mac and web) would settle whether E2 is needed.
