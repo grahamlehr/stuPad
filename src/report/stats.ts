@@ -32,6 +32,11 @@ export interface ActivityBucket {
   total: number;
 }
 
+/** Columns (x, 0..47) in the miss-tap grid; see `ReportStats.missGrid`. */
+export const MISS_GRID_COLS = 48;
+/** Rows (y, 0..26) in the miss-tap grid; see `ReportStats.missGrid`. */
+export const MISS_GRID_ROWS = 27;
+
 export interface ReportStats {
   /** session_id of the first event, or null for an empty log */
   sessionId: string | null;
@@ -43,6 +48,16 @@ export interface ReportStats {
   /** mean dwell_ms across all completed returns with known dwell; null if none */
   avgDwellMs: number | null;
   missTaps: number;
+  /**
+   * Miss-tap density over the home slide, as a 16:9-cell grid: `MISS_GRID_ROWS` (27) rows
+   * of `MISS_GRID_COLS` (48) columns, indexed `missGrid[row][col]`. A cell index is
+   * `floor(pct / 100 * count)` clamped to `0..count-1`, so `x = 100` (or `y = 100`) lands in
+   * the last column (row) and `x = 0` in the first. Only `miss_tap` events with finite `x`
+   * and `y` are counted; events with missing or non-finite coordinates are ignored. Raw
+   * miss-tap points are intentionally not kept anywhere in `ReportStats`, so memory stays
+   * flat regardless of event count.
+   */
+  missGrid: number[][];
   /** ordered: label map's key order, then any extra ids seen only in events, first-seen order */
   buttons: ButtonStats[];
   returnsByMethod: Record<ReturnMethod, number>;
@@ -86,6 +101,15 @@ function hourOf(ts: string): number {
   return Number.isNaN(n) ? 0 : n;
 }
 
+function emptyMissGrid(): number[][] {
+  return Array.from({ length: MISS_GRID_ROWS }, () => new Array(MISS_GRID_COLS).fill(0));
+}
+
+/** `pct` (0..100) to a clamped 0-based cell index in a `count`-wide axis. */
+function missCellIndex(pct: number, count: number): number {
+  return Math.min(count - 1, Math.max(0, Math.floor((pct / 100) * count)));
+}
+
 /**
  * Compute all report statistics from a flat event log in a single pass
  * (plus a couple of small finishing passes over the much smaller per-button/
@@ -107,6 +131,7 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       totalVisits: 0,
       avgDwellMs: null,
       missTaps: 0,
+      missGrid: emptyMissGrid(),
       buttons: Object.keys(labels).map((id) => ({
         id,
         label: labels[id],
@@ -163,6 +188,7 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
   let totalPresses = 0;
   let totalVisits = 0;
   let missTaps = 0;
+  const missGrid = emptyMissGrid();
   let dwellSumAll = 0;
   let dwellCountAll = 0;
   let totalNavTaps = 0;
@@ -256,6 +282,11 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       }
     } else if (ev.event === 'miss_tap') {
       missTaps += 1;
+      if (Number.isFinite(ev.x) && Number.isFinite(ev.y)) {
+        const col = missCellIndex(ev.x as number, MISS_GRID_COLS);
+        const row = missCellIndex(ev.y as number, MISS_GRID_ROWS);
+        missGrid[row][col] += 1;
+      }
     } else if (ev.event === 'slide_nav') {
       totalNavTaps += 1;
       if (ev.slide_to !== undefined) {
@@ -318,6 +349,7 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
     totalVisits,
     avgDwellMs,
     missTaps,
+    missGrid,
     buttons,
     returnsByMethod,
     bucketMinutes,

@@ -227,9 +227,10 @@ id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,metho
 | --- | --- |
 | 1. Summary | Session name, date/time range, total presses, total visits, average dwell, miss taps, number of buttons, onward nav taps (when any), thumbnail of home slide; a compact "Slide views" table (arrivals per slide) when the deck has any onward nav taps |
 | 2. Button share | Donut of presses by button with counts and %; horizontal bar of average dwell per button |
-| 3. Activity over time | Stacked bar chart of presses per interval, one colour per button. The interval is the finest of 5, 15, 30, 60, 120, 240 min or 1 day that keeps the chart to 48 bars or fewer |
-| 4. Return behaviour | Split of returns by Home button, tap and timeout; share of visits ending by timeout per button |
-| 5. Hour-by-day (multi-day only) | Heatmap of presses by hour and day |
+| 3. Home slide taps (only when there are miss taps) | Heatmap of where visitors tapped and missed on the home slide (48 x 27 grid of cells, white-to-blackberry ramp), with each button's bounds drawn as an outline and label over it, and the home thumbnail underneath when one is available. Caption: miss taps as a share of all home-slide taps (button presses + miss taps) |
+| 4. Activity over time | Stacked bar chart of presses per interval, one colour per button. The interval is the finest of 5, 15, 30, 60, 120, 240 min or 1 day that keeps the chart to 48 bars or fewer |
+| 5. Return behaviour | Split of returns by Home button, tap and timeout; share of visits ending by timeout per button |
+| 6. Hour-by-day (multi-day only) | Heatmap of presses by hour and day |
 
 If the scope has no events, the report is a single Summary page reading "No interactions recorded." Button colours are consistent across every chart. Charts are drawn on-device to canvas and embedded as images in the PDF. Every page has a footer: `GGPad · <session name> · page n/N · generated <time>`.
 

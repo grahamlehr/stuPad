@@ -28,6 +28,7 @@ export function makeMockCtx(): MockCtx {
     'scale',
     'translate',
     'measureText',
+    'drawImage',
   ];
   const ctx: Record<string, unknown> = {
     // settable properties

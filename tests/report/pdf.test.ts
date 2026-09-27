@@ -171,4 +171,38 @@ describe('buildPdf: exact page counts', () => {
     const blob = await buildPdf(multiDay, deck, config);
     expect(await countPdfPages(blob)).toBe(5);
   });
+
+  it('adds a "Home slide taps" page after Button share only when the log has miss taps', async () => {
+    const deck = makeDeck(['b1']);
+    const config = defaultConfig('demo.pptx');
+    const withoutMissTaps: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', visit_id: 'v1', event: 'button_press', button_id: 'b1', button_label: 'A' },
+      { ts: '2026-10-14T09:00:10.000+00:00', session_id: 's1', visit_id: 'v1', event: 'return_home', method: 'tap', dwell_ms: 10000 },
+    ];
+    const withMissTaps: LogEvent[] = [
+      ...withoutMissTaps,
+      { ts: '2026-10-14T09:00:20.000+00:00', session_id: 's1', event: 'miss_tap', x: 12, y: 88 },
+    ];
+
+    const noMissBlob = await buildPdf(withoutMissTaps, deck, config);
+    expect(await countPdfPages(noMissBlob)).toBe(4);
+
+    const withMissBlob = await buildPdf(withMissTaps, deck, config);
+    expect(await countPdfPages(withMissBlob)).toBe(5);
+  });
+
+  it('renders the Home slide taps page without throwing when a home thumbnail is provided', async () => {
+    const deck = makeDeck(['b1']);
+    const config = defaultConfig('demo.pptx');
+    const pngBytes = Uint8Array.from(atob(TINY_PNG.split(',')[1]), (c) => c.charCodeAt(0));
+    const thumb = new Blob([pngBytes], { type: 'image/png' });
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', event: 'miss_tap', x: 50, y: 50 },
+    ];
+    // jsdom has no createImageBitmap, so the thumbnail decode is skipped and the page must
+    // still render (button outlines and grid cells alone), never throwing.
+    const blob = await buildPdf(events, deck, config, thumb);
+    expect(await readHeader(blob)).toBe('%PDF');
+    expect(await countPdfPages(blob)).toBe(5);
+  });
 });

@@ -99,6 +99,7 @@ Only `pointerdown` is used for taps, so the 150 ms tap-to-slide budget is not sp
 
 ```ts
 computeStats(events: LogEvent[], labels: Record<string,string>): ReportStats  // pure, heavily tested
+// ReportStats.missGrid: number[][], MISS_GRID_ROWS x MISS_GRID_COLS (27 x 48) home-slide miss-tap density, missGrid[row][col]
 toCsv(events): string; csvFileName(sessionName, now): string
 buildPdf(events, deck, config, homeThumbPng?: Blob): Promise<Blob>   // A4 landscape, pages per SPEC; jsPDF is lazy-imported
 pdfFileName(sessionName, now): string                                // same <session>_<yyyy-mm-dd-hhmm> pattern as csvFileName
@@ -106,6 +107,7 @@ exportFile(file: File): Promise<'shared'|'downloaded'|'cancelled'>   // navigato
 buttonColor(i: number): string    // consistent palette across all charts
 returnMethodColor(m: ReturnMethod): string        // in src/report/colors.ts; not re-exported from index.ts
 draw*Chart(ctx, width, height, data, fontScale?)  // donut, dwell bar, activity, bar, percent bar, heatmap: hand-drawn canvas charts (src/report/charts.ts)
+drawTapHeatmap(ctx, w, h, { grid, buttons, deckHeight, thumbnail? }, fontScale?)  // home-slide miss-tap grid + button outlines, thumbnail optional (src/report/charts.ts)
 ```
 
 ## Conventions

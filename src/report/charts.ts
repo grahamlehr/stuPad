@@ -9,6 +9,8 @@
  * every function guards for that and simply does nothing.
  */
 
+import { SLIDE_W } from '../types';
+
 export interface NamedValue {
   label: string;
   value: number;
@@ -40,6 +42,26 @@ export interface HeatmapChartData {
   matrix: number[][];
 }
 
+export interface TapHeatmapButton {
+  label: string;
+  /** slide px (see src/types.ts geometry convention: x/w over SLIDE_W, y/h over deckHeight) */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface TapHeatmapData {
+  /** missGrid[row][col], see ReportStats.missGrid (27 rows x 48 columns, 16:9 cells) */
+  grid: number[][];
+  /** home-slide button bounds and resolved labels, drawn as outlines over the grid */
+  buttons: TapHeatmapButton[];
+  /** deck.height, slide px; the grid is mapped onto a deckHeight-tall area so a non-16:9 deck still lines up */
+  deckHeight: number;
+  /** decoded home-slide thumbnail, drawn underneath the grid when available (best-effort) */
+  thumbnail?: CanvasImageSource;
+}
+
 const FONT_FAMILY = 'Helvetica, Arial, sans-serif';
 const TEXT_COLOR = '#1a1a1a';
 const MUTED_COLOR = '#666666';
@@ -57,6 +79,19 @@ function fmtMs(ms: number): string {
   const m = Math.floor(s / 60);
   const rem = Math.round(s % 60);
   return `${m}m ${rem}s`;
+}
+
+/**
+ * White-to-Emota-blackberry (#2A034C, the brand's logo colour) colour ramp shared by every
+ * density chart (hour-by-day heatmap, home-slide tap heatmap). `t` is 0..1.
+ */
+function rampColor(t: number): { r: number; g: number; b: number } {
+  const to = { r: 42, g: 3, b: 76 };
+  return {
+    r: Math.round(255 + (to.r - 255) * t),
+    g: Math.round(255 + (to.g - 255) * t),
+    b: Math.round(255 + (to.b - 255) * t),
+  };
 }
 
 function clearBg(ctx: CanvasRenderingContext2D, width: number, height: number): void {
@@ -405,9 +440,6 @@ export function drawHeatmapChart(
   for (const row of matrix) for (const v of row) max = Math.max(max, v);
   max = Math.max(1, max);
 
-  // base colour ramp from white to Emota blackberry (#2A034C), the brand's logo colour
-  const rampTo = { r: 42, g: 3, b: 76 };
-
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
   ctx.font = scaledFont(11, fontScale);
@@ -417,10 +449,7 @@ export function drawHeatmapChart(
     ctx.fillText(day, labelW - 8, marginT + r * cellH + cellH / 2);
     for (let h = 0; h < 24; h++) {
       const v = matrix[r]?.[h] ?? 0;
-      const t = v / max;
-      const rr = Math.round(255 + (rampTo.r - 255) * t);
-      const gg = Math.round(255 + (rampTo.g - 255) * t);
-      const bb = Math.round(255 + (rampTo.b - 255) * t);
+      const { r: rr, g: gg, b: bb } = rampColor(v / max);
       ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
       ctx.fillRect(labelW + h * cellW, marginT + r * cellH, Math.ceil(cellW) - 1, Math.ceil(cellH) - 1);
     }
@@ -432,5 +461,104 @@ export function drawHeatmapChart(
   ctx.textBaseline = 'top';
   for (let h = 0; h < 24; h += 3) {
     ctx.fillText(String(h).padStart(2, '0'), labelW + h * cellW + cellW / 2, marginT + plotH + 4);
+  }
+}
+
+/**
+ * Miss-tap density over the home slide: `data.grid` cells coloured with the same
+ * white-to-blackberry ramp as `drawHeatmapChart` (at partial opacity, so an optional
+ * thumbnail underneath stays visible), then every button's bounds drawn as an outline
+ * with its label. The plot area is letterboxed to the deck's own aspect ratio
+ * (`SLIDE_W` wide by `deckHeight` tall) so grid cells, the thumbnail and the button
+ * outlines all line up, even for a non-16:9 deck.
+ *
+ * The thumbnail is optional and best-effort: when absent (not generated, or failed to
+ * decode) the cells and outlines alone still make the chart readable.
+ */
+export function drawTapHeatmap(
+  ctx: CanvasRenderingContext2D | null,
+  width: number,
+  height: number,
+  data: TapHeatmapData,
+  fontScale = 1,
+): void {
+  if (!ctx) return;
+  clearBg(ctx, width, height);
+  const { grid, buttons, thumbnail } = data;
+  const deckHeight = data.deckHeight > 0 ? data.deckHeight : (SLIDE_W * 9) / 16;
+  const rows = grid.length;
+  const cols = rows > 0 ? grid[0].length : 0;
+
+  if (rows === 0 && buttons.length === 0) {
+    ctx.fillStyle = MUTED_COLOR;
+    ctx.font = scaledFont(16, fontScale);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('No data', width / 2, height / 2);
+    return;
+  }
+
+  // letterbox the deck's own aspect ratio inside the available width x height, same
+  // idea as SlideStage on screen, so the grid, thumbnail and button outlines agree.
+  const deckAspect = SLIDE_W / deckHeight;
+  let plotW = width;
+  let plotH = width / deckAspect;
+  if (plotH > height) {
+    plotH = height;
+    plotW = height * deckAspect;
+  }
+  const plotX = (width - plotW) / 2;
+  const plotY = (height - plotH) / 2;
+
+  if (thumbnail) {
+    try {
+      ctx.drawImage(thumbnail, plotX, plotY, plotW, plotH);
+      // light wash so the heatmap cells and outlines stay legible over the thumbnail
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+      ctx.fillRect(plotX, plotY, plotW, plotH);
+    } catch {
+      // best-effort: draw without the thumbnail
+    }
+  } else {
+    ctx.strokeStyle = GRID_COLOR;
+    ctx.strokeRect(plotX, plotY, plotW, plotH);
+  }
+
+  if (rows > 0 && cols > 0) {
+    let max = 0;
+    for (const row of grid) for (const v of row) max = Math.max(max, v);
+    if (max > 0) {
+      const cellW = plotW / cols;
+      const cellH = plotH / rows;
+      ctx.save();
+      ctx.globalAlpha = 0.75;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const v = grid[r][c];
+          if (v <= 0) continue;
+          const { r: rr, g: gg, b: bb } = rampColor(v / max);
+          ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
+          ctx.fillRect(plotX + c * cellW, plotY + r * cellH, Math.ceil(cellW) - 0.5, Math.ceil(cellH) - 0.5);
+        }
+      }
+      ctx.restore();
+    }
+  }
+
+  // button bounds (slide px, x/w over SLIDE_W, y/h over deckHeight) as outlines + labels
+  ctx.strokeStyle = '#2A034C';
+  ctx.lineWidth = Math.max(1, 1.5 * fontScale);
+  ctx.font = scaledFont(11, fontScale, true);
+  ctx.fillStyle = TEXT_COLOR;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const b of buttons) {
+    const bx = plotX + (b.x / SLIDE_W) * plotW;
+    const by = plotY + (b.y / deckHeight) * plotH;
+    const bw = (b.w / SLIDE_W) * plotW;
+    const bh = (b.h / deckHeight) * plotH;
+    ctx.strokeRect(bx, by, bw, bh);
+    const label = b.label.length > 18 ? `${b.label.slice(0, 17)}…` : b.label;
+    ctx.fillText(label, bx + bw / 2, by + bh / 2);
   }
 }
