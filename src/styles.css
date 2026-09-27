@@ -226,6 +226,12 @@ h3 {
   margin: 0;
 }
 
+.setup-version {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 2px 0 0;
+}
+
 /* The lockup files carry transparent padding (about 13.4% of the width on every side), so
    negative margins pull the visible mark flush right and keep the row as tall as the heading. */
 .setup-logo {

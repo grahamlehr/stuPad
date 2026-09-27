@@ -49,3 +49,7 @@ Real behaviour (share sheet, wake lock, Guided Access, Home Screen standalone mo
 ## Deployment
 
 `.github/workflows/deploy-pages.yml` runs the tests, builds with `BASE_PATH` from `actions/configure-pages`, and deploys `dist/` to GitHub Pages on every push to `main`. The repo setting is Settings → Pages → Source: **GitHub Actions**.
+
+`main` is protected by a repository ruleset: no direct pushes, force pushes or deletion, so every change lands through a pull request. `.github/workflows/ci.yml` runs `npm test` and `npm run build` on each PR, and its `test` job must pass before merging.
+
+**Versioning:** every push or PR to `main` is a release, so it must bump `version` in `package.json` (then `npm install --package-lock-only` to sync the lockfile). Use semver: patch (1.2.1 → 1.2.2) for fixes, tweaks and copy changes; minor (1.2.x → 1.3.0) for new features or new config options; major only for breaking changes, e.g. a deck format or stored data that older builds can't read. `package.json` is the only place to edit: `vite.config.ts` injects it as `import.meta.env.VITE_APP_VERSION`, which the Setup header and the page title (`%VITE_APP_VERSION%` in `index.html`) display. Never hard-code the version anywhere else.

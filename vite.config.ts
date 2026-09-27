@@ -1,11 +1,17 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import pkg from './package.json' with { type: 'json' };
 
 // BASE_PATH is set by the GitHub Pages workflow (e.g. /stuPad/); defaults to / for local dev and other hosts.
 const base = process.env.BASE_PATH ?? '/';
 
 export default defineConfig({
   base,
+  // The app version shown in Setup and the page title comes from package.json: bump it there only.
+  // Available as import.meta.env.VITE_APP_VERSION in code and %VITE_APP_VERSION% in index.html.
+  define: {
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(pkg.version),
+  },
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',

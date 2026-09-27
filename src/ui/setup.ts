@@ -114,7 +114,13 @@ export class SetupScreen {
     clear(this.root);
     this.root.append(
       h('header', { class: 'setup-header' }, [
-        h('div', { class: 'setup-title-row' }, [h('h1', {}, ['GGPad v1.2 setup']), emotaLogo()]),
+        h('div', { class: 'setup-title-row' }, [
+          h('div', {}, [
+            h('h1', {}, ['GGPad setup']),
+            h('p', { class: 'setup-version' }, [`v${import.meta.env.VITE_APP_VERSION}`]),
+          ]),
+          emotaLogo(),
+        ]),
         h('p', { class: 'setup-sub' }, ['Load linked PowerPoint, configure the kiosk, go live, run reports.']),
       ]),
       this.renderLoadStep(),
