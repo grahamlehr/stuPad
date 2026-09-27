@@ -75,6 +75,22 @@ describe('store: config migration', () => {
     const loaded = await store.loadConfig();
     expect(loaded?.glow).toEqual({ enabled: false, color: '#ffffff', intensity: 5, periodMs: 2000 });
   });
+
+  it('defaults deviceName to \'\' for a config saved before it existed', async () => {
+    const store = await freshStore();
+    const { deviceName: _deviceName, ...oldCfg } = defaultConfig('demo.pptx');
+    await store.saveConfig(oldCfg as KioskConfig);
+    const loaded = await store.loadConfig();
+    expect(loaded?.deviceName).toBe('');
+  });
+
+  it('leaves an explicitly-set deviceName alone', async () => {
+    const store = await freshStore();
+    const cfg = { ...defaultConfig('demo.pptx'), deviceName: 'Stand A' };
+    await store.saveConfig(cfg);
+    const loaded = await store.loadConfig();
+    expect(loaded?.deviceName).toBe('Stand A');
+  });
 });
 
 describe('store: events CRUD and ordering', () => {

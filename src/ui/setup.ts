@@ -215,7 +215,9 @@ export class SetupScreen {
     this.previewSlide = 1;
     this.previewPath = [];
     if (this.deck) {
-      this.config = { ...defaultConfig(file.name), buttonLabels: {} };
+      // Device name describes the iPad, not the deck (SPEC "Configurable settings"), so it's
+      // the one setting that survives loading a new file instead of resetting to default.
+      this.config = { ...defaultConfig(file.name), buttonLabels: {}, deviceName: this.config.deviceName };
       this.mountPreview();
       this.persist();
     }
@@ -474,6 +476,15 @@ export class SetupScreen {
         type: 'text',
         value: cfg.sessionName,
         oninput: (e: Event) => update({ sessionName: (e.target as HTMLInputElement).value }),
+      }),
+
+      h('h3', {}, ['Device name']),
+      h('input', {
+        type: 'text',
+        value: cfg.deviceName,
+        maxlength: '40',
+        placeholder: 'e.g. Stand A',
+        oninput: (e: Event) => update({ deviceName: (e.target as HTMLInputElement).value }),
       }),
 
       h('h3', {}, ['Button labels']),

@@ -1,10 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { SetupScreen } from '../../src/ui/setup';
 import * as render from '../../src/render';
 import * as store from '../../src/store';
 import { stubObjectUrl } from '../render/setup-url';
 import { deck, slide } from '../render/helpers';
 import { defaultConfig } from '../../src/types';
+
+const FIXTURES = path.resolve(__dirname, '../fixtures');
+
+async function loadFixtureFile(name: string): Promise<File> {
+  const buf = await fs.readFile(path.join(FIXTURES, name));
+  return new File([buf], name, {
+    type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  });
+}
 
 beforeEach(() => {
   stubObjectUrl();
@@ -122,6 +133,61 @@ describe('SetupScreen: clear previous data', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('SetupScreen: device name field', () => {
+  function deviceNameInput(container: HTMLElement): HTMLInputElement {
+    return container.querySelector('[data-step="configure"] input[placeholder="e.g. Stand A"]') as HTMLInputElement;
+  }
+
+  it('shows the stored device name and saves an edit', () => {
+    vi.useFakeTimers();
+    try {
+      const saveConfig = vi.spyOn(store, 'saveConfig').mockResolvedValue();
+      const container = document.createElement('div');
+      const initialConfig = { ...defaultConfig('deck.pptx'), deviceName: 'Stand A' };
+      const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+      expect(deviceNameInput(container).value).toBe('Stand A');
+
+      deviceNameInput(container).value = 'Stand B';
+      deviceNameInput(container).dispatchEvent(new Event('input'));
+      vi.advanceTimersByTime(400);
+
+      expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ deviceName: 'Stand B' }));
+      screen.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is empty by default', () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+    expect(deviceNameInput(container).value).toBe('');
+    screen.destroy();
+  });
+
+  it('carries the device name over when loading a new deck, unlike every other setting', async () => {
+    vi.spyOn(store, 'saveDeck').mockResolvedValue();
+    vi.spyOn(store, 'saveConfig').mockResolvedValue();
+    const container = document.createElement('div');
+    const initialConfig = { ...defaultConfig('deck.pptx'), deviceName: 'Stand A', sessionName: 'Old session' };
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+    const file = await loadFixtureFile('good.pptx');
+    // loadFile is private; called directly (as the file input's onchange does) so the test
+    // can await its completion instead of racing real zip-parsing microtasks via a DOM event.
+    await (screen as unknown as { loadFile: (f: File) => Promise<void> }).loadFile(file);
+
+    // Every other setting resets to defaultConfig(fileName): session name changes...
+    const sessionNameInput = container.querySelector('[data-step="configure"] input[type="text"]') as HTMLInputElement;
+    expect(sessionNameInput.value).not.toBe('Old session');
+    // ...but the device name, which describes the iPad rather than the deck, survives.
+    expect(deviceNameInput(container).value).toBe('Stand A');
+
+    screen.destroy();
   });
 });
 

@@ -124,8 +124,9 @@ The preview shows the home slide with each detected button outlined and labelled
 | Secret exit sequence | Four corners clockwise from top-left, within 5 s | Corners clockwise from top-left / corners counter-clockwise from top-left / top-left ×3 then bottom-right ×2, with a window of 3, 5, 8 or 10 s. A corner is the outer 12% of the slide's width and height |
 | Admin PIN after sequence | Off | 4 to 6 digits |
 | Session name | Deck file name + date | Free text, required, printed on reports and used in export file names |
+| Device name | Empty | Free text, optional, up to 40 characters, identifies which iPad this is (e.g. "Stand A"); printed in the PDF header and footer |
 
-Loading a new deck resets every setting to its default. Settings and the parsed deck are saved to IndexedDB, so reopening the app resumes where it left off, including straight back into kiosk mode if it was running.
+Loading a new deck resets every setting to its default, except the device name: it describes the iPad, not the deck, so it carries over unchanged. Settings and the parsed deck are saved to IndexedDB, so reopening the app resumes where it left off, including straight back into kiosk mode if it was running.
 
 ## Kiosk mode behaviour
 
@@ -180,6 +181,7 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | `app_resume` | App relaunches or returns to foreground in kiosk mode |
 | `admin_unlock_fail` | Wrong PIN entered after the secret sequence |
 | `log_cleared` | Clear log or Clear previous data wiped the log; the only record left after the wipe |
+| `heartbeat` | Every 15 minutes while the kiosk is running, proving it's still alive; see "Uptime" below |
 
 **Record fields**
 
@@ -225,15 +227,21 @@ id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,metho
 
 | Page | Content |
 | --- | --- |
-| 1. Summary | Session name, date/time range, total presses, total visits, average dwell, miss taps, number of buttons, onward nav taps (when any), thumbnail of home slide; a compact "Slide views" table (arrivals per slide) when the deck has any onward nav taps |
+| 1. Summary | Session name (with the device name alongside it, when set), date/time range, total presses, total visits, average dwell, miss taps, number of buttons, an "Uptime" tile (e.g. "97%", or "n/a" with no monitored span), onward nav taps (when any), thumbnail of home slide; a compact "Slide views" table (arrivals per slide) when the deck has any onward nav taps |
 | 2. Button share | Donut of presses by button with counts and %; horizontal bar of average dwell per button |
 | 3. Home slide taps (only when there are miss taps) | Heatmap of where visitors tapped and missed on the home slide (48 x 27 grid of cells, white-to-blackberry ramp), with each button's bounds drawn as an outline and label over it, and the home thumbnail underneath when one is available. Caption: miss taps as a share of all home-slide taps (button presses + miss taps) |
-| 4. Activity over time | Stacked bar chart of presses per interval, one colour per button. The interval is the finest of 5, 15, 30, 60, 120, 240 min or 1 day that keeps the chart to 48 bars or fewer |
+| 4. Activity over time | Stacked bar chart of presses per interval, one colour per button, with a thin up/down strip underneath it on the same time axis (green for a monitored running span, muted red for a downtime gap, neutral grey for an unmonitored span with no heartbeat data, light grey outside any span), legend "Running / Down / Stopped" plus "No heartbeat data" when the scope has an unmonitored span. The interval is the finest of 5, 15, 30, 60, 120, 240 min or 1 day that keeps the chart to 48 bars or fewer |
 | 5. Return behaviour | Split of returns by Home button, tap and timeout; share of visits ending by timeout per button |
 | 6. Slides and paths (only when there are onward nav taps) | Left: horizontal bars of median time spent per slide, plus a second bar excluding timeout-ended visits. Right: a table of the most common routes through the deck ("3 → 4 → 5"), each with a count and %, top 8 plus an "Other" row |
 | 7. Hour-by-day (multi-day only) | Heatmap of presses by hour and day |
 
-If the scope has no events, the report is a single Summary page reading "No interactions recorded." Button colours are consistent across every chart. Charts are drawn on-device to canvas and embedded as images in the PDF. Every page has a footer: `GGPad · <session name> · page n/N · generated <time>`.
+If the scope has no events, the report is a single Summary page reading "No interactions recorded." Button colours are consistent across every chart. Charts are drawn on-device to canvas and embedded as images in the PDF. Every page has a footer: `GGPad · <device name, when set> · <session name> · page n/N · generated <time>`.
+
+**Uptime.** A running span opens at `kiosk_start`; if no span is already open, any other event opens one too, since events are only ever logged while the kiosk is running, so an event with no span open means the scope simply cut off the `kiosk_start` that would have opened it (a date-range export, for example). The one exception is `kiosk_stop`: with no span open it closes nothing and starts nothing. A span closes at the matching `kiosk_stop`; if the log ends, or another `kiosk_start` arrives, while a span is still open, that span closes at its own last event instead. Time outside any span (kiosk stopped, admin in Setup) is neither up nor down.
+
+Uptime is measured only for a span that contains at least one `heartbeat`, i.e. a span logged by 1.5.0 or later. A span with no heartbeat at all (an older log, or a new-build span too short for one 15-minute tick) is "unmonitored": its whole duration is reported separately and never counted as up or down, since without a heartbeat there is nothing to measure a silence against. Within a monitored span, every consecutive pair of events (heartbeats, taps, `app_resume`, anything) is walked in order: a gap longer than 20 minutes between them is downtime, everything else is uptime, so uptime plus downtime always equals the total time spent in monitored spans. An `app_resume` after a long silence inside an already-open span (rather than opening a new one) is exactly how a kill, relaunch or extended backgrounding shows up, and the gap right before it is the downtime that's shown. The uptime percentage is uptime over uptime-plus-downtime across monitored spans only, "n/a" when there are none. A scoped report (a date range, a single session) computes uptime over just the events in that scope.
+
+A `heartbeat` extends the report's date/time range (`firstTs`/`lastTs`, and so the Activity chart's time axis and bucket width) exactly as `kiosk_start`/`kiosk_stop`/every other event already did, but it is never counted as a calendar day on its own: a session that merely stays running past midnight with no other activity does not become a multi-day report, and a heartbeat never changes a press, visit or activity count.
 
 **Time per slide and common paths.** For a deck with onward navigation (nav links or "Last Slide Viewed" back links), the report reconstructs each visit's route: the button's target slide, then each `slide_nav.slide_to`, in order (a back link can send a visitor to a slide already in the path, so the same slide number can appear twice). Time on a slide left by navigation is that `slide_nav`'s `dwell_ms`; time on the last slide of a visit is the `return_home` timestamp minus the visitor's last arrival there (not `return_home.dwell_ms`, which is the whole visit). A visit that never reaches `return_home` (the app was killed, or the export scope starts or ends mid-visit) is left out of the slide-time numbers, since its last, unfinished stay was never timed, but it is still counted in the path table, suffixed "(ended)": e.g. "3 → 4 (ended)" is a separate row from "3 → 4". A `slide_nav` or `return_home` whose `visit_id` has no matching `button_press` in the scope is ignored entirely (the scope cut the visit in half). The last slide of a visit that ends by `timeout` can overstate time spent by up to the configured timeout, so the chart's primary bar and its median (not the mean) are the headline number, and the second bar recomputes the median with every timeout-ended visit's last-slide stay excluded (its earlier slides, timed by `slide_nav.dwell_ms`, are unaffected and stay in both bars). The slide-time chart shows at most 16 slides, keeping the ones with the most timed stays (then listing them in ascending slide order) and noting how many more slides aren't shown, so labels stay legible on a deck with many destination slides.
 

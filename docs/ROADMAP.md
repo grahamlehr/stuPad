@@ -63,7 +63,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 - `src/report/pdf.ts`: page "Slides and paths", only when `totalNavTaps > 0`. Left: horizontal bars of median time per slide. Right: a table of the top paths ("3 → 4 → T&Cs → 4", with count and %). Use slide numbers; titles are not in the deck model.
 - Tests: multi-slide visit, back-link revisit (the same slide twice in a path), a visit orphaned by a kill, and a timeout-ended visit.
 
-## D. Heartbeat and uptime (item 3)
+## D. Heartbeat and uptime (item 3) (done in 1.5.0)
 
 **Goal.** Prove the kiosk ran all day, and show when it didn't (crash, battery, someone leaving the app).
 
