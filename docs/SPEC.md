@@ -66,6 +66,8 @@ Buttons are ordinary shapes on slide 1 with PowerPoint's own "Link to: Slide N" 
 
 **Button naming.** The report uses the shape's name from the Selection Pane (e.g. `BTN_Sustainability`). If unnamed, the app uses the shape's text; if neither exists, "Button 1", "Button 2" in reading order. The admin can rename labels in setup.
 
+**Polls and ratings.** A shape named `VOTE_<poll>_<choice>` (or `RATE_<poll>_<choice>` for a numeric rating, e.g. "Rate this stand 1 to 5") is a poll option, e.g. `VOTE_Topic_Sustainability` or `RATE_Stand_4`. It may sit on any slide, including slide 1 alongside buttons. The poll name (the segment right after the prefix) can't contain underscores; the choice name (everything after that) may. If it also has a slide link (an ordinary "Link to: Slide N", or a "Last Slide Viewed" back link), the kiosk records the vote and then follows the link as it would for any other linked shape, so "vote then see a thank-you slide" needs no new concept. On the home slide, a vote shape only acts as a button (and counts toward the two-button minimum) when its link goes to a later slide, exactly like an ordinary button; a home-slide vote shape with no link, one linking to slide 1 itself, or one using "Last Slide Viewed", is not a button, does not count toward the minimum, and is a plain vote with the Home cooldown described below (see "Kiosk mode behaviour"). The same poll name used with both `VOTE_` and `RATE_` prefixes is one poll, warned about and treated as a plain vote (no mean) rather than a rating. Warnings: a poll with only one option, the same choice used twice in one poll, and a `RATE_` choice that isn't a number (it's still counted, just left out of the mean).
+
 **Supported content**
 
 | Element | Supported | Notes |
@@ -114,6 +116,7 @@ The preview shows the home slide with each detected button outlined and labelled
 | Setting | Default | Range / options |
 | --- | --- | --- |
 | Button labels (for reports) | From shape name or text | Free text |
+| Poll labels (for reports; shown only when the deck has poll options) | From the choice name, prettified | Free text, per poll choice |
 | Return-to-home timeout | 20 s | 5 to 300 s, or off |
 | Return method | Home button or timeout | Home button only / tap anywhere / timeout only / combination |
 | Idle warning before timeout | Off | Show countdown in last 5 s |
@@ -150,8 +153,8 @@ stateDiagram-v2
 **Rules**
 
 - Full-screen, no browser chrome, no visible UI other than the slide and its buttons.
-- Only detected button areas respond on the home slide; taps elsewhere are logged as "miss" taps but do nothing.
-- On a destination slide, a tap is checked against the Home link first, then any back links, then any nav links on that slide; a nav link tap logs `slide_nav` and moves to the target slide without leaving destination mode.
+- Only detected button areas respond on the home slide; taps elsewhere are logged as "miss" taps but do nothing. A poll/rating option is tested before buttons, so an unlinked one is never logged as a miss tap.
+- On a destination slide, a tap is checked against any poll/rating option on that slide first, then the Home link, then any back links, then any nav links; a nav link tap logs `slide_nav` and moves to the target slide without leaving destination mode.
 - A back link tap returns to the previous slide of the current visit (logged as `slide_nav`), or returns Home (logged as `return_home` with method `home_button`) if the visit started on this slide. The history belongs to one visit: it is cleared on every return to Home, including a timeout.
 - The timeout timer starts when a destination slide appears and resets on any tap on that slide, including a nav link tap that moves to a further slide.
 - If a destination slide has no shape linking back to slide 1 or back link (whether it's a direct destination or reached through a chain of nav links) and the Home button return method is enabled, the kiosk shows a discreet fallback Home button so no slide is a dead end.
@@ -161,6 +164,9 @@ stateDiagram-v2
 - The secret sequence works on any slide, including during the attract loop, and is checked before normal tap handling. A tap that continues or completes a sequence is consumed and never triggers a button. The first corner tap of a sequence is handled normally, so a button placed in a corner still works; the trade-off is that starting the sequence on a slide with a top-left button presses that button once (and, in attract mode, that same first tap also wakes the kiosk, since a corner tap that isn't yet continuing an attempt is handled as a normal tap, see below).
 - Taps in the letterbox (outside the slide) do nothing and are not logged.
 - If the app is closed or crashes, it relaunches straight into kiosk mode on the home slide.
+
+**Polls and ratings.** A poll/rating option is hit-tested before every link on a destination slide, and before buttons on Home, so its vote is recorded even when the same shape is also a link or a button. It's one vote per poll per visit: once a poll has been voted in during the current visit, a repeat tap on any of its options logs nothing further (though a linked option's own link is still followed, and press feedback still shows). A new visit can vote in the same poll again. If the option is linked, the kiosk logs the vote and then follows the link exactly as it would for a plain link (a `button_press` on Home, or `slide_nav`/`return_home` on a destination slide), so "vote then see a thank-you slide" needs no extra concept. If it isn't linked, the kiosk shows press feedback and a brief "Thanks" overlay (1.5 s) instead. On Home, whether a vote shape takes the button path is decided the same way as for the two-button minimum above: only a link to a later slide makes it a button. A vote shape with no link, or one linking to slide 1 itself or using "Last Slide Viewed" (neither of which is a button), has no visit to dedupe against: the debounce still applies, and in addition each poll gets its own 3-second cooldown, so a rapid flurry of taps on the same option counts as one vote; press feedback and the Thanks overlay always show, but the vote itself, and re-arming the attract idle timer, only happen once the cooldown has passed, and a suppressed tap never logs a miss tap. A vote shape that is a button (its link goes to a later slide) starts a normal visit like any other button press, so it needs no separate cooldown. In attract mode, the wake tap never presses anything (see below) and so never votes either, even directly over a poll option.
+- Home-slide votes with no link are counted in the report as interactions (see "Exit and reporting"), not as visits: they have no destination, dwell or return, so they don't affect average dwell, Return behaviour or Button share.
 
 **Attract loop.** When the attract setting is on, an idle timer starts once the kiosk is on Home and has nothing else to do: after kiosk start, after a miss tap, after returning to Home by any method, and after waking from a previous attract period. A button press (which leaves Home) or a tap that continues the secret sequence (which counts as activity but keeps the admin's attempt going) each cancel or restart it, so an admin working the exit sequence never accidentally triggers the loop underneath themselves. When the timer fires, the kiosk logs `attract_start` and enters Attract mode:
 
@@ -197,6 +203,7 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | `heartbeat` | Every 15 minutes while the kiosk is running, proving it's still alive; see "Uptime" below |
 | `attract_start` | The idle timer fires on Home and the attract loop begins |
 | `attract_end` | A tap wakes the kiosk from the attract loop; `dwell_ms` is the time spent in that attract period. Not logged when the loop is ended by `kiosk_stop`, `kiosk_start` or `app_resume` instead of a tap |
+| `vote` | A poll/rating option (`VOTE_`/`RATE_` shape) is tapped and its poll hasn't already been voted in during this visit; `poll` and `choice` name the option. Has a `visit_id` for a destination-slide vote or a linked home vote (the same visit a `button_press`/`slide_nav`/`return_home` would use); no `visit_id` for an unlinked home vote |
 
 **Record fields**
 
@@ -213,6 +220,7 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | `method` | enum, return events only | timeout |
 | `dwell_ms` | integer; on `return_home`, time for the whole visit; on `slide_nav`, time spent on just the slide being left; on `attract_end`, time spent in the attract period | 18420 |
 | `x`, `y` | tap position as % of slide, rounded to 0.1, miss taps only | 12.5, 88.0 |
+| `poll`, `choice` | poll and choice names from the shape's `VOTE_`/`RATE_` name, `vote` events only | Topic, Net_Zero |
 
 `dwell_ms` on each return gives time spent per destination, which is the most useful engagement measure after raw press counts. `slide_nav` events let a report break that down further into time spent per slide within a multi-slide visit, and count arrivals at each slide.
 
@@ -230,25 +238,27 @@ The panel shows the current session's presses, visits, average dwell and miss ta
 
 **CSV**
 
-One row per event, all fields from the data model, with a header row. RFC 4180 quoting, CRLF line endings, and UTF-8 with a byte-order mark so Excel reads non-ASCII labels correctly. File name: `<session-name>_<yyyy-mm-dd-hhmm>.csv`.
+One row per event, all fields from the data model, with a header row. RFC 4180 quoting, CRLF line endings, and UTF-8 with a byte-order mark so Excel reads non-ASCII labels correctly. `poll` and `choice` are appended at the end, after `x`/`y`, so a spreadsheet that reads earlier columns by position is unaffected. File name: `<session-name>_<yyyy-mm-dd-hhmm>.csv`.
 
 ```csv
-id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,method,dwell_ms,x,y
-1042,2026-10-14T10:32:07.412+01:00,7f3c,a91e,button_press,4,Sustainability,1,3,,,,
-1043,2026-10-14T10:32:25.832+01:00,7f3c,a91e,return_home,,,3,1,timeout,18420,,
+id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,method,dwell_ms,x,y,poll,choice
+1042,2026-10-14T10:32:07.412+01:00,7f3c,a91e,button_press,4,Sustainability,1,3,,,,,,
+1043,2026-10-14T10:32:25.832+01:00,7f3c,a91e,return_home,,,3,1,timeout,18420,,,,
+1044,2026-10-14T10:32:40.000+01:00,7f3c,,vote,,,3,,,,,,Topic,Net_Zero
 ```
 
 **PDF report (A4 landscape)**
 
 | Page | Content |
 | --- | --- |
-| 1. Summary | Session name (with the device name alongside it, when set), date/time range, total presses, total visits, average dwell, miss taps, number of buttons, an "Uptime" tile (e.g. "97%", or "n/a" with no monitored span), onward nav taps (when any), an "Attract pull-in" tile (e.g. "12 / 40 (30%)", attract\_end count over attract\_start count, only shown when the loop has run at least once), thumbnail of home slide; a compact "Slide views" table (arrivals per slide) when the deck has any onward nav taps |
+| 1. Summary | An "Interactions" tile (total visits plus home-slide votes with no link) shown first, only when the log has any `vote` events. Session name (with the device name alongside it, when set), date/time range, total presses, total visits, average dwell, miss taps, number of buttons, an "Uptime" tile (e.g. "97%", or "n/a" with no monitored span), onward nav taps (when any), an "Attract pull-in" tile (e.g. "12 / 40 (30%)", attract\_end count over attract\_start count, only shown when the loop has run at least once), thumbnail of home slide; a compact "Slide views" table (arrivals per slide) when the deck has any onward nav taps |
 | 2. Button share | Donut of presses by button with counts and %; horizontal bar of average dwell per button |
 | 3. Home slide taps (only when there are miss taps) | Heatmap of where visitors tapped and missed on the home slide (48 x 27 grid of cells, white-to-blackberry ramp), with each button's bounds drawn as an outline and label over it, and the home thumbnail underneath when one is available. Caption: miss taps as a share of all home-slide taps (button presses + miss taps). Miss taps during the attract loop are never logged, so they never appear here |
 | 4. Activity over time | Stacked bar chart of presses per interval, one colour per button, with a light shaded band behind any bucket that overlapped an attract period (opacity scaled by how much of the bucket's own span was in attract mode) and a legend entry "Attract loop" when any bucket has one, plus a thin up/down strip underneath it on the same time axis (green for a monitored running span, muted red for a downtime gap, neutral grey for an unmonitored span with no heartbeat data, light grey outside any span), legend "Running / Down / Stopped" plus "No heartbeat data" when the scope has an unmonitored span. The interval is the finest of 5, 15, 30, 60, 120, 240 min or 1 day that keeps the chart to 48 bars or fewer |
 | 5. Return behaviour | Split of returns by Home button, tap and timeout; share of visits ending by timeout per button |
 | 6. Slides and paths (only when there are onward nav taps) | Left: horizontal bars of median time spent per slide, plus a second bar excluding timeout-ended visits. Right: a table of the most common routes through the deck ("3 → 4 → 5"), each with a count and %, top 8 plus an "Other" row |
-| 7. Hour-by-day (multi-day only) | Heatmap of presses by hour and day |
+| 7. Poll results (one page per poll with at least one vote) | Title "Poll results: \<poll label\>"; a horizontal bar chart of the poll's choices with count and %; for a `RATE_` poll, also "Mean score 4.2 (n = 37)" (numeric choices only; a non-numeric `RATE_` choice is counted in the bars but excluded from the mean). Counts every vote, home and destination alike |
+| 8. Hour-by-day (multi-day only) | Heatmap of presses by hour and day |
 
 If the scope has no events, the report is a single Summary page reading "No interactions recorded." Button colours are consistent across every chart. Charts are drawn on-device to canvas and embedded as images in the PDF. Every page has a footer: `GGPad · <device name, when set> · <session name> · page n/N · generated <time>`.
 

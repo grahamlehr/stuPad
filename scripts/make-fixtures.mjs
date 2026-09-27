@@ -14,6 +14,12 @@
  *                          (patched in via JSZip; pptxgenjs can't emit hlinkshowjump),
  *                          a self-link (authoring mistake -> self_link warning), and a
  *                          Terms slide whose Back shape uses `lastslideviewed`
+ *   polls.pptx           - home (2 buttons, BTN_A -> slide 2, BTN_B -> slide 3) plus an
+ *                          unlinked VOTE_Mood_Happy / VOTE_Mood_Sad poll on the home slide;
+ *                          slide 2 has RATE_Stand_1..RATE_Stand_5 (unlinked) and a
+ *                          VOTE_Topic_Net_Zero option linked to the thank-you slide (4);
+ *                          slide 3 has a single-option VOTE_Single_OnlyOption (unlinked,
+ *                          -> poll_single_option warning); slide 4 is the thank-you slide
  *
  * Run: npm run fixtures
  */
@@ -542,6 +548,124 @@ async function makeGroupedButton(goodPath, outPath) {
   await fs.writeFile(outPath, buf);
 }
 
+/**
+ * Deck for the polls/ratings feature (see the header comment for the full layout). Poll
+ * option shapes are plain rectangles (no hyperlink option passed) with `objectName` set to
+ * the VOTE_/RATE_ name; a shape only needs a name and bounds to be detected as a poll option,
+ * a link is optional (src/pptx/buttons.ts detectPollOptions).
+ */
+function buildPollsDeck() {
+  const pptx = new PptxGenJS();
+  pptx.defineLayout({ name: 'STUPAD_16x9', width: 13.333, height: 7.5 });
+  pptx.layout = 'STUPAD_16x9';
+
+  // ---- Slide 1: Home, 2 buttons plus an unlinked VOTE_Mood_* poll ----
+  const home = pptx.addSlide();
+  home.background = { color: NAVY };
+  home.addText('Polls fixture', {
+    x: 0.6, y: 0.4, w: 12, h: 0.8, fontFace: FONT, fontSize: 26, bold: true, color: WHITE,
+  });
+  home.addText('Ratings', {
+    x: 1, y: 1.6, w: 2.7, h: 1.6,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.12,
+    fill: { color: ACCENT }, fontFace: FONT, fontSize: 18, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'BTN_A',
+    hyperlink: { slide: 2 },
+  });
+  home.addText('Info', {
+    x: 4, y: 1.6, w: 2.7, h: 1.6,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.12,
+    fill: { color: '2E5D8A' }, fontFace: FONT, fontSize: 18, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'BTN_B',
+    hyperlink: { slide: 3 },
+  });
+
+  home.addText('How are you feeling today?', {
+    x: 0.6, y: 3.6, w: 6, h: 0.5, fontFace: FONT, fontSize: 16, color: 'C8CEDB',
+  });
+  home.addText('Happy', {
+    x: 0.6, y: 4.2, w: 2, h: 1,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.12,
+    fill: { color: '2E7D6B' }, fontFace: FONT, fontSize: 16, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'VOTE_Mood_Happy',
+  });
+  home.addText('Sad', {
+    x: 2.8, y: 4.2, w: 2, h: 1,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.12,
+    fill: { color: '7A2E5D' }, fontFace: FONT, fontSize: 16, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'VOTE_Mood_Sad',
+  });
+
+  // ---- Slide 2: RATE_Stand_1..5 (unlinked) + VOTE_Topic_Net_Zero (linked -> slide 4) ----
+  const ratings = pptx.addSlide();
+  ratings.background = { color: LIGHT };
+  ratings.addText('Rate this stand', { x: 0.6, y: 0.4, w: 12, h: 0.8, fontFace: FONT, fontSize: 26, bold: true, color: NAVY });
+  for (let i = 1; i <= 5; i++) {
+    ratings.addText(String(i), {
+      x: 0.6 + (i - 1) * 1.5, y: 1.6, w: 1.2, h: 1.2,
+      shape: pptx.ShapeType.roundRect, rectRadius: 0.12,
+      fill: { color: ACCENT }, fontFace: FONT, fontSize: 20, bold: true, color: WHITE,
+      align: 'center', valign: 'middle',
+      objectName: `RATE_Stand_${i}`,
+    });
+  }
+  ratings.addText('Net Zero', {
+    x: 0.6, y: 3.4, w: 2.7, h: 1.2,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.12,
+    fill: { color: '2E5D8A' }, fontFace: FONT, fontSize: 16, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'VOTE_Topic_Net_Zero',
+    hyperlink: { slide: 4 },
+  });
+  ratings.addText('Home', {
+    x: 0.6, y: 6.5, w: 1.8, h: 0.6,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.15,
+    fill: { color: NAVY }, fontFace: FONT, fontSize: 14, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'BTN_Home',
+    hyperlink: { slide: 1 },
+  });
+
+  // ---- Slide 3: a single-option poll (VOTE_Single_OnlyOption) -> poll_single_option warning ----
+  const info = pptx.addSlide();
+  info.background = { color: LIGHT };
+  info.addText('Info', { x: 0.6, y: 0.4, w: 12, h: 0.8, fontFace: FONT, fontSize: 26, bold: true, color: NAVY });
+  info.addText('Only option', {
+    x: 0.6, y: 1.6, w: 2.7, h: 1.2,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.12,
+    fill: { color: '8A5D2E' }, fontFace: FONT, fontSize: 16, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'VOTE_Single_OnlyOption',
+  });
+  info.addText('Home', {
+    x: 0.6, y: 6.5, w: 1.8, h: 0.6,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.15,
+    fill: { color: NAVY }, fontFace: FONT, fontSize: 14, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'BTN_Home',
+    hyperlink: { slide: 1 },
+  });
+
+  // ---- Slide 4: thank-you slide (target of the linked VOTE_Topic_Net_Zero option) ----
+  const thanks = pptx.addSlide();
+  thanks.background = { color: LIGHT };
+  thanks.addText('Thanks for voting', { x: 0.6, y: 0.5, w: 12, h: 1, fontFace: FONT, fontSize: 28, bold: true, color: NAVY });
+  thanks.addText('Home', {
+    x: 0.6, y: 6.5, w: 1.8, h: 0.6,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.15,
+    fill: { color: NAVY }, fontFace: FONT, fontSize: 14, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'BTN_Home',
+    hyperlink: { slide: 1 },
+  });
+
+  return pptx;
+}
+
 async function main() {
   const good = buildGoodDeck();
   const goodFixturePath = path.join(FIXTURES_DIR, 'good.pptx');
@@ -575,6 +699,11 @@ async function main() {
   await injectShowJumpAction(multiSlidePath, 'slide5.xml', 'BTN_Back', 'lastslideviewed');
   await assertShowJumpAction(multiSlidePath, 'slide5.xml', 'lastslideviewed');
   console.log(`Wrote ${multiSlidePath}`);
+
+  const polls = buildPollsDeck();
+  const pollsPath = path.join(FIXTURES_DIR, 'polls.pptx');
+  await writePptx(polls, pollsPath);
+  console.log(`Wrote ${pollsPath}`);
 
   console.log('Done.');
 }

@@ -15,7 +15,7 @@ This is the build plan the app was created from: stack, module ownership and pub
 
 | Dir | Owner (phase) | Responsibility | Public API |
 | --- | --- | --- | --- |
-| `src/pptx/` + `scripts/make-fixtures.mjs` | Agent A (1) | Unzip, parse slides/layouts/masters/theme, resolve colours/fonts/backgrounds, detect buttons, home links, onward nav links & "Last Slide Viewed" back links, validate (reachability via buttons + nav-link chains) | `parsePptx(input: Blob \| ArrayBuffer, fileName: string): Promise<ParseResult>` |
+| `src/pptx/` + `scripts/make-fixtures.mjs` | Agent A (1) | Unzip, parse slides/layouts/masters/theme, resolve colours/fonts/backgrounds, detect buttons, home links, onward nav links, "Last Slide Viewed" back links & poll/rating options, validate (reachability via buttons + nav-link chains; poll warnings) | `parsePptx(input: Blob \| ArrayBuffer, fileName: string): Promise<ParseResult>` |
 | `src/render/` | Agent B (1) | Deck model → DOM at SLIDE_W x height, stage that letterboxes to screen, thumbnails, raster fallback | see below |
 | `src/store/`, `src/kiosk/` | Agent C (1) | IndexedDB persistence + append-only log; kiosk runtime state machine | see below |
 | `src/report/` | Agent D (1) | Stats, CSV, PDF (charts on canvas), share-sheet export | see below |
@@ -82,6 +82,7 @@ export class SecretSequenceDetector {
 export function checklist(): string[];                   // operator checklist text shown at Go live
 export async function acquireWakeLock(): Promise<boolean>; // one-shot probe (acquire then release) so Setup can warn; the controller holds its own long-lived lock
 export const ATTRACT_CROSSFADE_MS: number;                // fixed crossfade length for every attract-cycle step, independent of config.transitionMs
+export const HOME_POLL_COOLDOWN_MS: number;                // per-poll cooldown for an unlinked Home vote (no visit to dedupe against)
 // also exported for tests and reuse: pointInRect, round1, cornerOf
 ```
 
@@ -96,12 +97,25 @@ glowStyle(cfg: GlowConfig)                       // shadow colour, blur/spread (
 applyGlowStyle(el, cfg); createGlow(target); createGlowLayer(deck, slide, cfg): HTMLElement
 ```
 
-Only `pointerdown` is used for taps, so the 150 ms tap-to-slide budget is not spent waiting for a click. Kiosk rules (SPEC "Kiosk mode behaviour"): secret sequence checked before normal handling (taps that continue or complete a sequence are consumed and never trigger buttons; a sequence's first corner tap is handled normally); home: button hit → `button_press` + new visit_id + transition; else `miss_tap` with x/y %; destination: home-link hit → `return_home`, else a back-link hit (deck.backLinks) → `slide_nav` to the previous slide of this visit (a per-visit history, cleared on return home), or `return_home` if the visit started on this slide, else a nav-link hit (deck.navLinks for the current slide) → `slide_nav` + move to the target slide (still destination mode: fallback Home button and timeout are re-applied for the new slide) → else tap-anywhere / timeout → `return_home` with method + dwell_ms (the whole visit's dwell, from the first button press, not just the last slide); `slide_nav`'s own dwell_ms is just the time on the slide being left; timeout resets on any tap, including a nav tap; debounce ignores repeat taps (not logged); idle warning countdown in last 5 s; press feedback; disable gestures (touch-action, user-select, contextmenu, gesturestart, dblclick); visibilitychange re-acquires wake lock. If `returnMethods.homeButton` is on and a destination slide has no home link or back link (whether reached directly or via a chain of nav links), show a discreet ≥44pt "Home" overlay button so users are never stranded; the previous slide's fallback button (if any) is removed before drawing a new one. Attract mode: any accepted tap → `wakeFromAttract`, never a button press or `miss_tap`, logs `attract_end` + dwell_ms, back to home mode, idle timer re-armed.
+Only `pointerdown` is used for taps, so the 150 ms tap-to-slide budget is not spent waiting for a click. Kiosk rules (SPEC "Kiosk mode behaviour"): secret sequence checked before normal handling (taps that continue or complete a sequence are consumed and never trigger buttons; a sequence's first corner tap is handled normally); home: a poll/rating option that isn't also a button hit first (see below), else button hit → `button_press` + new visit_id + transition (and, if the button is also a poll option, `vote` logged right after with the same visit_id); else `miss_tap` with x/y %; destination: a poll/rating option on the slide is tested first (see below), then home-link hit → `return_home`, else a back-link hit (deck.backLinks) → `slide_nav` to the previous slide of this visit (a per-visit history, cleared on return home), or `return_home` if the visit started on this slide, else a nav-link hit (deck.navLinks for the current slide) → `slide_nav` + move to the target slide (still destination mode: fallback Home button and timeout are re-applied for the new slide) → else tap-anywhere / timeout → `return_home` with method + dwell_ms (the whole visit's dwell, from the first button press, not just the last slide); `slide_nav`'s own dwell_ms is just the time on the slide being left; timeout resets on any tap, including a nav tap; debounce ignores repeat taps (not logged); idle warning countdown in last 5 s; press feedback; disable gestures (touch-action, user-select, contextmenu, gesturestart, dblclick); visibilitychange re-acquires wake lock. If `returnMethods.homeButton` is on and a destination slide has no home link or back link (whether reached directly or via a chain of nav links), show a discreet ≥44pt "Home" overlay button so users are never stranded; the previous slide's fallback button (if any) is removed before drawing a new one. Attract mode: any accepted tap → `wakeFromAttract`, never a button press, `miss_tap` or `vote`, logs `attract_end` + dwell_ms, back to home mode, idle timer re-armed.
+
+**Polls and ratings** (`deck.pollOptions`, `PollOptionDef[]`, precomputed into `pollOptionsBySlide: Map<slide, PollOptionDef[]>` in the constructor). One vote per poll per visit: `visitVotedPolls: Set<string>` (poll names already voted in this visit) is checked before logging, and cleared whenever a visit starts or ends, alongside `visitPath`. On a destination slide the option is tested before every link; a hit logs `vote` (unless already voted this visit) and, if the option is linked, falls through to the normal link handling below it for the same tap (so the link is followed, whether or not this tap logged a new vote); if unlinked, the kiosk shows press feedback and the Thanks overlay, resets the destination timeout, and stops (no further link tested). On Home, whether an option takes the button path is decided by button membership (`homeButtonIds`, precomputed from `deck.buttons`), not by the option's own `linked` flag: `linked` is true for any link, including one to slide 1 or a "Last Slide Viewed" back link, neither of which is a button (`detectButtons` requires `targetSlide > 1`). An option that isn't a button has no visit to dedupe against, so a per-poll cooldown (`HOME_POLL_COOLDOWN_MS`, keyed by `now()`) stands in: press feedback and the Thanks overlay always show, but the `vote` log (with no `visit_id`) and re-arming the attract idle timer only happen once the cooldown has passed; a suppressed tap is never `miss_tap`. A Home option that is a button runs the normal button path and then logs `vote` with the same `visit_id`. The Thanks overlay (`.kiosk-poll-thanks`, in `styles.css`) is built once lazily in the stage overlay; only its visibility class and a single 1.5 s hide timer are touched afterwards, and the timer is cleared on every slide change and in `stop()`.
 
 ### Report API (`src/report/index.ts`)
 
 ```ts
-computeStats(events: LogEvent[], labels: Record<string,string>): ReportStats  // pure, heavily tested
+computeStats(events: LogEvent[], labels: Record<string,string>, opts?: ComputeStatsOpts): ReportStats  // pure, heavily tested
+// ComputeStatsOpts = { pollOptions?: PollOptionMeta[]; pollLabels?: Record<string,string> }
+//   PollOptionMeta = { poll, choice, kind: 'vote'|'rate', label } (from Deck.pollOptions); pollLabels
+//   is KioskConfig.pollLabels (admin renames), keyed by pollLabelKey(poll, choice) (src/types.ts).
+// ReportStats.homeVotes: number    // vote events with no visit_id (unlinked Home votes)
+// ReportStats.interactions: number // totalVisits + homeVotes; Summary's headline "Interactions" tile
+// ReportStats.polls: PollStat[] = { poll, label, kind: 'vote'|'rate', total, choices, mean }[]
+//   choices: { choice, label, count, pct }[]. Every vote counts (home and destination alike, decision
+//   4); poll/choice order follows opts.pollOptions (deck order) then first-seen in events; kind is
+//   'rate' only if every opts.pollOptions entry for that poll is 'rate' (mixed VOTE_/RATE_, per the
+//   parser's poll_mixed_kind warning, aggregates as 'vote'); mean averages numeric choices weighted
+//   by count (rate polls only), excluding a non-numeric RATE_ choice (still counted in total/choices).
 // ReportStats.missGrid: number[][], MISS_GRID_ROWS x MISS_GRID_COLS (27 x 48) home-slide miss-tap density, missGrid[row][col]
 // ReportStats.slideTime: SlideTimeStat[] = { slide, visits, medianMs, meanMs, medianMsExclTimeout, visitsExclTimeout }[]
 //   one entry per slide with a timed stay (see visitPaths below); medianMsExclTimeout/visitsExclTimeout
@@ -131,8 +145,8 @@ computeStats(events: LogEvent[], labels: Record<string,string>): ReportStats  //
 //   log. Only closed { fromMs, toMs } periods are kept; each is clipped into the ActivityBucket(s) it
 //   overlaps once bucket sizing is known, so memory stays flat regardless of event count.
 // ActivityBucket.attractMs: number   // ms of this bucket's own span spent in an attract period, clipped to it
-toCsv(events): string; csvFileName(sessionName, now): string   // heartbeat/attract_start/attract_end rows included like any other event, no extra columns
-buildPdf(events, deck, config, homeThumbPng?: Blob): Promise<Blob>   // A4 landscape, pages per SPEC; jsPDF is lazy-imported; config.deviceName (trimmed), when set, is shown on Summary and in every footer; Summary gains an "Attract pull-in" tile once attractStarts > 0
+toCsv(events): string; csvFileName(sessionName, now): string   // heartbeat/attract_start/attract_end/vote rows included like any other event; poll/choice are the last two CSV_COLUMNS
+buildPdf(events, deck, config, homeThumbPng?: Blob): Promise<Blob>   // A4 landscape, pages per SPEC; jsPDF is lazy-imported; config.deviceName (trimmed), when set, is shown on Summary and in every footer; Summary gains an "Attract pull-in" tile once attractStarts > 0 and an "Interactions" tile (shown first) once the log has any vote events; a "Poll results" page is added per poll with at least one vote
 pdfFileName(sessionName, now): string                                // same <session>_<yyyy-mm-dd-hhmm> pattern as csvFileName
 exportFile(file: File): Promise<'shared'|'downloaded'|'cancelled'>   // navigator.share({files}) → fallback <a download>
 buttonColor(i: number): string    // consistent palette across all charts
@@ -143,6 +157,7 @@ drawTapHeatmap(ctx, w, h, { grid, buttons, deckHeight, thumbnail? }, fontScale?)
 drawSlideTimeChart(ctx, w, h, { entries: { slide, medianMs, medianMsExclTimeout }[] }, fontScale?)  // paired horizontal bars, median time per slide; caps at the 16 busiest slides (by stays, then ascending slide order) with a "+N more" note (src/report/charts.ts)
 drawPathTable(ctx, w, h, { entries: { path, count, pct, ended, label? }[] }, fontScale?)  // "3 → 4 → 5" style table drawn on canvas, so the arrow renders (jsPDF's Helvetica can't); caller does the top-8/"Other" bucketing (src/report/charts.ts)
 drawUptimeStrip(ctx, w, h, { startMs, endMs, spans: {from,to,monitored}[], gaps }, fontScale?)  // thin up/down strip, same time axis as drawActivityChart (shares its marginL/marginR formula so the two line up when given the same fontScale); green/red/grey for running/down/stopped, neutral grey for an unmonitored span, with a legend that adds "No heartbeat data" only when one is present (src/report/charts.ts)
+drawPollChart(ctx, w, h, { bars: { label, count, pct, color }[] }, fontScale?)  // horizontal bars for one poll's results, count and % per choice, in the order the caller supplies (src/report/charts.ts)
 ```
 
 ## Conventions

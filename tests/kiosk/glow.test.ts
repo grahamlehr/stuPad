@@ -50,6 +50,72 @@ describe('glowTargets', () => {
   });
 });
 
+describe('glowTargets: poll options', () => {
+  it('includes an unlinked poll option alongside buttons on Home', () => {
+    const d = deck({
+      slides: [slide({ index: 1 })],
+      buttons: [{ id: 'b1', shapeName: 'BTN', text: '', defaultLabel: 'A', targetSlide: 2, bounds: B }],
+      pollOptions: [
+        {
+          slide: 1,
+          id: 'v1',
+          shapeName: 'VOTE_Mood_Happy',
+          poll: 'Mood',
+          choice: 'Happy',
+          kind: 'vote',
+          label: 'Happy',
+          bounds: { x: 300, y: 300, w: 50, h: 50 },
+          linked: false,
+        },
+      ],
+    });
+    expect(glowTargets(d, 1).map((t) => t.bounds.x)).toEqual([B.x, 300]);
+  });
+
+  it('dedupes a poll option that is also a button, by shape id, instead of glowing it twice', () => {
+    const d = deck({
+      slides: [slide({ index: 1 })],
+      buttons: [{ id: 'b1', shapeName: 'BTN', text: '', defaultLabel: 'A', targetSlide: 2, bounds: B }],
+      pollOptions: [
+        {
+          slide: 1,
+          id: 'b1',
+          shapeName: 'VOTE_Topic_Zero',
+          poll: 'Topic',
+          choice: 'Zero',
+          kind: 'vote',
+          label: 'Zero',
+          bounds: B,
+          linked: true,
+          targetSlide: 2,
+        },
+      ],
+    });
+    expect(glowTargets(d, 1)).toHaveLength(1);
+  });
+
+  it('includes a poll option on a destination slide alongside its other links', () => {
+    const d = deck({
+      slides: [slide({ index: 1 }), slide({ index: 2 })],
+      homeLinks: [{ slide: 2, id: 'h', bounds: { x: 10, y: 10, w: 50, h: 50 } }],
+      pollOptions: [
+        {
+          slide: 2,
+          id: 'r1',
+          shapeName: 'RATE_Stand_3',
+          poll: 'Stand',
+          choice: '3',
+          kind: 'rate',
+          label: '3',
+          bounds: { x: 500, y: 500, w: 50, h: 50 },
+          linked: false,
+        },
+      ],
+    });
+    expect(glowTargets(d, 2).map((t) => t.bounds.x)).toEqual([10, 500]);
+  });
+});
+
 describe('glowStyle', () => {
   it('scales size and brightness with intensity, and splits the period into two half-pulses', () => {
     const soft = glowStyle({ enabled: true, color: '#ff0000', intensity: 1, periodMs: 3000 });

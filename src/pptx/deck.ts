@@ -212,6 +212,7 @@ export async function loadDeck(pkg: Pkg, fileName: string): Promise<{ deck: Deck
     homeLinks: [],
     navLinks: [],
     backLinks: [],
+    pollOptions: [],
     media,
     fonts: Array.from(fontsUsed).sort(),
   };
@@ -254,6 +255,7 @@ function emptyDeck(fileName: string, slideWidthEmu = 12192000, slideHeightEmu = 
     homeLinks: [],
     navLinks: [],
     backLinks: [],
+    pollOptions: [],
     media: {},
     fonts: [],
   };

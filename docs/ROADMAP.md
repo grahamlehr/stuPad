@@ -127,7 +127,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
   - Miss taps during attract are not logged, which keeps B's heatmap clean.
 - Tests: controller flows with fake timers (idle to attract, tap to Home with no press, the secret sequence during attract, stop clears timers).
 
-## G. Polls and ratings (item 9)
+## G. Polls and ratings (item 9) (done in 1.7.0)
 
 **Goal.** Let a deck ask a question ("Which topic matters most?", "Rate this stand 1 to 5") without collecting personal data.
 

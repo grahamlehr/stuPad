@@ -21,8 +21,17 @@ describe('toCsv', () => {
     ];
     const csv = toCsv(events);
     const lines = csv.slice(1).split('\r\n');
-    expect(lines[1]).toBe('1042,2026-10-14T10:32:07.412+01:00,7f3c,a91e,button_press,4,Sustainability,1,3,,,,');
-    expect(lines[2]).toBe('1043,2026-10-14T10:32:25.832+01:00,7f3c,a91e,return_home,,,3,1,timeout,18420,,');
+    expect(lines[1]).toBe('1042,2026-10-14T10:32:07.412+01:00,7f3c,a91e,button_press,4,Sustainability,1,3,,,,,,');
+    expect(lines[2]).toBe('1043,2026-10-14T10:32:25.832+01:00,7f3c,a91e,return_home,,,3,1,timeout,18420,,,,');
+  });
+
+  it('writes poll and choice as the last two columns for a vote event', () => {
+    const events: LogEvent[] = [
+      { id: 1, ts: 't1', session_id: 's', visit_id: 'v1', event: 'vote', poll: 'Topic', choice: 'Net_Zero', slide_from: 3 },
+    ];
+    const csv = toCsv(events);
+    const lines = csv.slice(1).split('\r\n');
+    expect(lines[1]).toBe('1,t1,s,v1,vote,,,3,,,,,,Topic,Net_Zero');
   });
 
   it('quotes fields containing commas, quotes, or newlines per RFC 4180', () => {

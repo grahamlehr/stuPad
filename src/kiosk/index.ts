@@ -9,7 +9,7 @@
  * without a DOM or fake timers.
  */
 import { SlideStage, preloadDeckFonts } from '../render';
-import type { Deck, ButtonDef, NavLinkDef, KioskConfig, GlowConfig, LogEvent, Rect, SecretPattern } from '../types';
+import type { Deck, ButtonDef, NavLinkDef, PollOptionDef, KioskConfig, GlowConfig, LogEvent, Rect, SecretPattern } from '../types';
 import { uuid } from '../util';
 import { applyGlowStyle, createGlow, createGlowLayer } from './glow';
 
@@ -205,6 +205,15 @@ export const ATTRACT_CROSSFADE_MS = 1000;
  * the glow is off entirely (see `KioskController.ensureAttractPulseElements`). */
 const ATTRACT_PULSE_MIN_INTENSITY = 8;
 
+/**
+ * Home-slide cooldown for an *unlinked* poll/rating option (ROADMAP "Polls and ratings"):
+ * an unlinked vote on Home has no visit to dedupe against, so a per-poll cooldown stands in
+ * for "one vote per poll per visit". Measured with the controller's `now()`.
+ */
+export const HOME_POLL_COOLDOWN_MS = 3000;
+/** How long the "Thanks" overlay stays visible after an unlinked poll/rating vote. */
+const POLL_THANKS_MS = 1500;
+
 export class KioskController {
   private readonly root: HTMLElement;
   private readonly deck: Deck;
@@ -229,6 +238,28 @@ export class KioskController {
   /** Destination slides shown during the current visit, oldest first; the last entry is
    * destSlide. A "Last Slide Viewed" (back) link pops it. Empty while on the home slide. */
   private visitPath: number[] = [];
+
+  /** Poll option lookup, precomputed once so a tap is just a filter + hit test (no scan of
+   * `deck.pollOptions` itself, and no DOM work). */
+  private readonly pollOptionsBySlide = new Map<number, PollOptionDef[]>();
+  /**
+   * Ids of `deck.buttons` (home-slide shapes with a link to a later slide), precomputed once.
+   * A Home poll option's own `linked` flag is true for *any* link, including one to slide 1
+   * or a "Last Slide Viewed" back link, neither of which `detectButtons` treats as a button
+   * (it requires `targetSlide > 1`). So whether a Home poll option takes the button path is
+   * decided by button membership (`homeButtonIds.has(opt.id)`), not by `opt.linked`.
+   */
+  private readonly homeButtonIds = new Set<string>();
+  /** Polls already voted in during the current visit (SPEC: one vote per poll per visit).
+   * Cleared whenever a visit starts or ends, like `visitPath`. */
+  private visitVotedPolls = new Set<string>();
+  /** poll -> `now()` of its last *unlinked* Home vote, for the per-poll cooldown
+   * (`HOME_POLL_COOLDOWN_MS`) that stands in for "one vote per visit" on Home, which has
+   * no visit to dedupe against. */
+  private readonly homePollLastVoteAt = new Map<string, number>();
+  /** The poll "Thanks" overlay, built once lazily in the stage overlay (see `showThanks`). */
+  private thanksEl: HTMLElement | null = null;
+  private thanksTimer: ReturnType<typeof setTimeout> | undefined;
 
   private lastAcceptedTapAt = -Infinity;
 
@@ -282,6 +313,12 @@ export class KioskController {
     this.log = opts.log;
     this.onAdminRequested = opts.onAdminRequested;
     this.detector = new SecretSequenceDetector(opts.config.secretPattern, opts.config.secretWindowMs, CORNER_FRACTION);
+    for (const opt of opts.deck.pollOptions ?? []) {
+      const list = this.pollOptionsBySlide.get(opt.slide);
+      if (list) list.push(opt);
+      else this.pollOptionsBySlide.set(opt.slide, [opt]);
+    }
+    for (const b of opts.deck.buttons) this.homeButtonIds.add(b.id);
   }
 
   get wakeLockAvailable(): boolean {
@@ -296,6 +333,7 @@ export class KioskController {
     this.mode = 'home';
     this.destSlide = null;
     this.visitPath = [];
+    this.visitVotedPolls = new Set();
     this.attractCycleSlides = [];
     this.attractCycleIndex = 0;
     this.attractPulseEl = null;
@@ -320,6 +358,11 @@ export class KioskController {
       clearTimeout(this.pressFeedbackTimer);
       this.pressFeedbackTimer = undefined;
     }
+    if (this.thanksTimer !== undefined) {
+      clearTimeout(this.thanksTimer);
+      this.thanksTimer = undefined;
+    }
+    this.thanksEl = null; // goes with the stage's overlay
     if (this.wakeLock) {
       const wl = this.wakeLock;
       this.wakeLock = null;
@@ -390,7 +433,7 @@ export class KioskController {
     this.lastAcceptedTapAt = now;
 
     if (this.mode === 'home') {
-      this.handleHomeTap(at.px, at.py, at.xPct, at.yPct);
+      this.handleHomeTap(at.px, at.py, at.xPct, at.yPct, now);
     } else if (this.mode === 'destination') {
       this.handleDestinationTap(at.px, at.py, now);
     } else {
@@ -404,7 +447,21 @@ export class KioskController {
     return this.deck.buttons.find((b) => pointInRect(px, py, b.bounds));
   }
 
-  private handleHomeTap(px: number, py: number, xPct: number, yPct: number): void {
+  private handleHomeTap(px: number, py: number, xPct: number, yPct: number, now: number): void {
+    // Poll options are tested before buttons (ROADMAP "Polls and ratings"). Whether an option
+    // takes the button path is decided by button membership (homeButtonIds), not by its own
+    // `linked` flag: `linked` is true for *any* link, including one to slide 1 or a "Last
+    // Slide Viewed" back link, neither of which detectButtons treats as a button (it requires
+    // targetSlide > 1). A non-button option would otherwise fall through to a miss_tap; a
+    // button option is also in deck.buttons, so hitTestButton below finds the same shape and
+    // its vote is logged right after button_press instead (see below).
+    const homePolls = this.pollOptionsBySlide.get(1) ?? [];
+    const nonButtonPollHit = homePolls.find((o) => !this.homeButtonIds.has(o.id) && pointInRect(px, py, o.bounds));
+    if (nonButtonPollHit) {
+      this.handleHomeUnlinkedVote(nonButtonPollHit, now);
+      return;
+    }
+
     const button = this.hitTestButton(px, py);
     if (!button) {
       this.log({ event: 'miss_tap', slide_from: 1, x: round1(xPct), y: round1(yPct) });
@@ -417,6 +474,7 @@ export class KioskController {
     // A button press leaves Home, so no attract idle timer should be left ticking underneath
     // the destination visit.
     this.clearAttractIdleTimer();
+    this.hideThanksImmediately();
     this.showPressFeedback(button.bounds);
 
     const label = this.config.buttonLabels[button.id] ?? button.defaultLabel;
@@ -426,6 +484,7 @@ export class KioskController {
     this.visitButtonLabel = label;
     this.visitStartedAt = this.now();
     this.slideEnteredAt = this.visitStartedAt;
+    this.visitVotedPolls = new Set();
 
     this.log({
       event: 'button_press',
@@ -436,6 +495,23 @@ export class KioskController {
       visit_id: visitId,
     });
 
+    // A poll option that is also a button (its id is in deck.buttons) is a normal button: log
+    // its vote right after button_press, with the same visit_id, so "vote then see a
+    // thank-you slide" needs no separate concept.
+    const linkedPollHit = homePolls.find((o) => o.id === button.id);
+    if (linkedPollHit) {
+      this.visitVotedPolls.add(linkedPollHit.poll);
+      this.log({
+        event: 'vote',
+        poll: linkedPollHit.poll,
+        choice: linkedPollHit.choice,
+        visit_id: visitId,
+        button_id: button.id,
+        button_label: label,
+        slide_from: 1,
+      });
+    }
+
     this.mode = 'destination';
     this.destSlide = button.targetSlide;
     this.visitPath = [button.targetSlide];
@@ -445,9 +521,42 @@ export class KioskController {
     this.startDestinationTimer();
   }
 
+  /** A poll/rating option tapped on Home that isn't also a button (see `homeButtonIds`): no
+   * visit to dedupe against, so a per-poll cooldown (`HOME_POLL_COOLDOWN_MS`) stands in for
+   * "one vote per visit". Press feedback and the Thanks overlay always show; the vote itself
+   * is only logged once the cooldown has passed, and never as a miss_tap. */
+  private handleHomeUnlinkedVote(opt: PollOptionDef, now: number): void {
+    const lastAt = this.homePollLastVoteAt.get(opt.poll);
+    if (lastAt === undefined || now - lastAt >= HOME_POLL_COOLDOWN_MS) {
+      this.homePollLastVoteAt.set(opt.poll, now);
+      this.log({ event: 'vote', poll: opt.poll, choice: opt.choice, slide_from: 1 });
+    }
+    this.showPressFeedback(opt.bounds);
+    this.showThanks();
+    // Home activity, whether or not the cooldown suppressed the log: it must re-arm the
+    // idle timer the same as any other accepted Home tap.
+    this.armAttractIdleTimer();
+  }
+
   private handleDestinationTap(px: number, py: number, now: number): void {
     const slide = this.destSlide;
     if (slide === null) return;
+
+    // Poll options are tested before every link on the slide (ROADMAP "Polls and ratings"):
+    // the vote must be recorded before a linked option's own link is followed below.
+    const pollHit = (this.pollOptionsBySlide.get(slide) ?? []).find((o) => pointInRect(px, py, o.bounds));
+    if (pollHit) {
+      const isNewVote = this.recordDestinationVote(pollHit);
+      if (!pollHit.linked) {
+        this.showPressFeedback(pollHit.bounds);
+        if (isNewVote) this.showThanks();
+        this.resetDestinationTimer();
+        return;
+      }
+      // Linked: fall through to the normal link handling below for this same tap, so the
+      // link is followed exactly as if the shape were a plain link (slide_nav / return_home
+      // logging unchanged), whether or not this tap actually logged a new vote.
+    }
 
     const homeLink = this.deck.homeLinks.find((h) => h.slide === slide && pointInRect(px, py, h.bounds));
     if (homeLink) {
@@ -510,6 +619,7 @@ export class KioskController {
   private moveToDestination(target: number, now: number): void {
     const fromSlide = this.destSlide;
     if (fromSlide === null) return;
+    this.hideThanksImmediately();
     const dwellMs = Math.max(0, Math.round(now - this.slideEnteredAt));
 
     this.log({
@@ -533,6 +643,7 @@ export class KioskController {
   private returnHome(method: 'home_button' | 'tap' | 'timeout', now: number): void {
     const slide = this.destSlide;
     this.clearDestinationTimers();
+    this.hideThanksImmediately();
     const dwellMs = Math.max(0, Math.round(now - this.visitStartedAt));
 
     this.log({
@@ -549,6 +660,7 @@ export class KioskController {
     this.mode = 'home';
     this.destSlide = null;
     this.visitPath = [];
+    this.visitVotedPolls = new Set();
     this.visitId = undefined;
     this.visitButtonId = undefined;
     this.visitButtonLabel = undefined;
@@ -645,6 +757,7 @@ export class KioskController {
   private startAttract(): void {
     if (!this.config.attract.enabled || this.mode !== 'home') return;
     this.clearAttractIdleTimer();
+    this.hideThanksImmediately();
     this.mode = 'attract';
     this.attractStartedAt = this.now();
     this.log({ event: 'attract_start' });
@@ -806,6 +919,63 @@ export class KioskController {
       el.remove();
       this.pressFeedbackTimer = undefined;
     }, PRESS_FEEDBACK_MS);
+  }
+
+  // --------------------------------------------------------- poll / rating
+
+  /** Records a vote on a destination-slide poll option, once per poll per visit (SPEC: repeat
+   * taps in the same visit are not logged). Returns whether this call actually logged a new
+   * vote, so the caller knows whether to show the Thanks overlay. */
+  private recordDestinationVote(opt: PollOptionDef): boolean {
+    if (this.visitVotedPolls.has(opt.poll)) return false;
+    this.visitVotedPolls.add(opt.poll);
+    this.log({
+      event: 'vote',
+      poll: opt.poll,
+      choice: opt.choice,
+      visit_id: this.visitId,
+      button_id: this.visitButtonId,
+      button_label: this.visitButtonLabel,
+      slide_from: this.destSlide ?? undefined,
+    });
+    return true;
+  }
+
+  /** Builds the "Thanks" overlay once, lazily, in the stage overlay; afterwards only its
+   * visibility class is toggled, so a vote never rebuilds DOM. */
+  private ensureThanksElement(): HTMLElement | null {
+    if (this.thanksEl) return this.thanksEl;
+    const overlay = this.stage?.overlay;
+    if (!overlay) return null;
+    const el = document.createElement('div');
+    el.className = 'kiosk-poll-thanks';
+    el.textContent = 'Thanks!';
+    overlay.appendChild(el);
+    this.thanksEl = el;
+    return el;
+  }
+
+  /** Shows the Thanks overlay and (re)starts the single timer that hides it again after
+   * `POLL_THANKS_MS`; a new vote while it's already showing just restarts that timer. */
+  private showThanks(): void {
+    const el = this.ensureThanksElement();
+    if (!el) return;
+    el.classList.add('kiosk-poll-thanks--visible');
+    if (this.thanksTimer !== undefined) clearTimeout(this.thanksTimer);
+    this.thanksTimer = setTimeout(() => {
+      el.classList.remove('kiosk-poll-thanks--visible');
+      this.thanksTimer = undefined;
+    }, POLL_THANKS_MS);
+  }
+
+  /** Cancels a pending Thanks timer and hides it immediately; called on every slide change
+   * (moveToDestination, returnHome, startAttract) and from `stop()`. */
+  private hideThanksImmediately(): void {
+    if (this.thanksTimer !== undefined) {
+      clearTimeout(this.thanksTimer);
+      this.thanksTimer = undefined;
+    }
+    this.thanksEl?.classList.remove('kiosk-poll-thanks--visible');
   }
 
   private setupFallbackHomeButton(): void {

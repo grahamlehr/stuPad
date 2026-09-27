@@ -1,4 +1,5 @@
 import type { LogEvent, ReturnMethod } from '../types';
+import { pollLabelKey } from '../types';
 
 // ---------------------------------------------------------------- types
 
@@ -83,6 +84,57 @@ export interface PathStat {
   path: number[];
   count: number;
   ended: boolean;
+}
+
+/**
+ * Poll/rating option metadata from the deck, passed via `ComputeStatsOpts.pollOptions` so
+ * `computeStats` can order polls/choices in deck order, resolve each poll's overall `kind`
+ * (see `PollStat.kind`) and fall back to a default label when the admin hasn't renamed a
+ * choice. One entry per `PollOptionDef` (`src/types.ts`); a poll appearing on several slides
+ * (or with the same choice defined twice, which is also a validation warning) just repeats.
+ */
+export interface PollOptionMeta {
+  poll: string;
+  choice: string;
+  kind: 'vote' | 'rate';
+  label: string;
+}
+
+/** One choice's tally within a `PollStat`. */
+export interface PollChoiceStat {
+  choice: string;
+  label: string;
+  count: number;
+  /** % of the poll's total votes, 0..100 */
+  pct: number;
+}
+
+/**
+ * Aggregate results for one poll (ROADMAP "Polls and ratings"), counting every vote:
+ * home-slide and destination-slide alike (decision 4). `kind` is `'rate'` only when every
+ * option `computeStats` has seen for this poll (via `ComputeStatsOpts.pollOptions`) is
+ * `'rate'`; a poll mixing `VOTE_`/`RATE_` (see `validateDeck`'s `poll_mixed_kind` warning) is
+ * `'vote'` here, and `mean` is always `null` for a `'vote'` poll.
+ */
+export interface PollStat {
+  poll: string;
+  /** display label for the poll itself (deck's own pretty-printed poll name) */
+  label: string;
+  kind: 'vote' | 'rate';
+  /** every vote for this poll, in scope */
+  total: number;
+  /** deck order (then any extra choices seen only in events), see `computeStats` */
+  choices: PollChoiceStat[];
+  /** mean of numeric choices, weighted by vote count; null for a 'vote' poll or with no numeric votes */
+  mean: number | null;
+}
+
+/** Optional extra context for `computeStats`: poll metadata and admin-renamed choice labels. */
+export interface ComputeStatsOpts {
+  /** deck's poll options (any order); used for poll/choice ordering, kind resolution and default labels */
+  pollOptions?: PollOptionMeta[];
+  /** KioskConfig.pollLabels: admin-renamed choice labels, keyed by `pollLabelKey(poll, choice)` */
+  pollLabels?: Record<string, string>;
 }
 
 /** Columns (x, 0..47) in the miss-tap grid; see `ReportStats.missGrid`. */
@@ -216,6 +268,15 @@ export interface ReportStats {
   /** attractEnds / attractStarts * 100, 0..100; null when attractStarts is 0. The "pull-in rate": of
    * every attract loop that ran, the share a visitor actually walked up and tapped to end. */
   attractPullInPct: number | null;
+  /** count of `vote` events with no visit_id: an unlinked poll/rating option tapped on Home,
+   * which has no destination, dwell or return, so it isn't a visit (decision 4). */
+  homeVotes: number;
+  /** totalVisits + homeVotes: the headline engagement count (Summary's "Interactions" tile).
+   * A linked home vote is already counted once, as its (real) visit. */
+  interactions: number;
+  /** one entry per poll seen (via `ComputeStatsOpts.pollOptions` and/or `vote` events),
+   * ordered per `ComputeStatsOpts.pollOptions` then first-seen in events; see `PollStat`. */
+  polls: PollStat[];
 }
 
 function emptyUptime(): UptimeStats {
@@ -371,6 +432,90 @@ function missCellIndex(pct: number, count: number): number {
   return Math.min(count - 1, Math.max(0, Math.floor((pct / 100) * count)));
 }
 
+/** Pretty-prints a raw poll name the same way choice names are prettified (underscores and
+ * hyphens to spaces). Poll names can't contain underscores (see `PollOptionDef`), so this
+ * only ever has hyphens to fold, but kept consistent with choice-label formatting. */
+function prettyPoll(poll: string): string {
+  const stripped = poll.replace(/[_-]+/g, ' ').trim();
+  return stripped || poll;
+}
+
+/**
+ * Builds `ReportStats.polls` from the per-poll/choice vote tallies collected while walking
+ * the event log, plus the optional deck metadata in `opts` (poll/choice order, each poll's
+ * overall `kind`, and default choice labels). Kept as its own function so both the empty-log
+ * early return and the main pass can share it.
+ */
+function buildPollStats(pollCounts: Map<string, Map<string, number>>, opts: ComputeStatsOpts): PollStat[] {
+  const metasByPoll = new Map<string, PollOptionMeta[]>();
+  const pollOrder: string[] = [];
+  const pollSeen = new Set<string>();
+  for (const meta of opts.pollOptions ?? []) {
+    const list = metasByPoll.get(meta.poll);
+    if (list) list.push(meta);
+    else metasByPoll.set(meta.poll, [meta]);
+    if (!pollSeen.has(meta.poll)) {
+      pollSeen.add(meta.poll);
+      pollOrder.push(meta.poll);
+    }
+  }
+  for (const poll of pollCounts.keys()) {
+    if (!pollSeen.has(poll)) {
+      pollSeen.add(poll);
+      pollOrder.push(poll);
+    }
+  }
+
+  return pollOrder.map((poll) => {
+    const metas = metasByPoll.get(poll) ?? [];
+    // 'rate' only if every option computeStats knows about for this poll is 'rate'
+    // (a poll mixing VOTE_/RATE_ is 'vote' everywhere it's aggregated; see PollStat).
+    const kind: 'vote' | 'rate' = metas.length > 0 && metas.every((m) => m.kind === 'rate') ? 'rate' : 'vote';
+    const counts = pollCounts.get(poll) ?? new Map<string, number>();
+    const total = Array.from(counts.values()).reduce((s, c) => s + c, 0);
+
+    const choiceOrder: string[] = [];
+    const choiceSeen = new Set<string>();
+    for (const m of metas) {
+      if (!choiceSeen.has(m.choice)) {
+        choiceSeen.add(m.choice);
+        choiceOrder.push(m.choice);
+      }
+    }
+    for (const choice of counts.keys()) {
+      if (!choiceSeen.has(choice)) {
+        choiceSeen.add(choice);
+        choiceOrder.push(choice);
+      }
+    }
+
+    const metaByChoice = new Map(metas.map((m) => [m.choice, m] as const));
+    const choices: PollChoiceStat[] = choiceOrder.map((choice) => {
+      const count = counts.get(choice) ?? 0;
+      const overrideLabel = opts.pollLabels?.[pollLabelKey(poll, choice)];
+      const label = overrideLabel ?? metaByChoice.get(choice)?.label ?? choice;
+      return { choice, label, count, pct: total > 0 ? (count / total) * 100 : 0 };
+    });
+
+    let mean: number | null = null;
+    if (kind === 'rate') {
+      let sum = 0;
+      let n = 0;
+      for (const choice of choiceOrder) {
+        const num = Number(choice);
+        if (Number.isFinite(num)) {
+          const c = counts.get(choice) ?? 0;
+          sum += num * c;
+          n += c;
+        }
+      }
+      mean = n > 0 ? sum / n : null;
+    }
+
+    return { poll, label: prettyPoll(poll), kind, total, choices, mean };
+  });
+}
+
 /** Median of a non-empty array of numbers; 0 for an empty array (callers guard length first). */
 function median(nums: number[]): number {
   if (nums.length === 0) return 0;
@@ -399,7 +544,11 @@ interface OpenVisitPath {
  * pass deck order), then any extra ids seen only in the events, in the
  * order first encountered.
  */
-export function computeStats(events: LogEvent[], labels: Record<string, string>): ReportStats {
+export function computeStats(
+  events: LogEvent[],
+  labels: Record<string, string>,
+  opts: ComputeStatsOpts = {},
+): ReportStats {
   if (events.length === 0) {
     return {
       sessionId: null,
@@ -437,6 +586,9 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       attractStarts: 0,
       attractEnds: 0,
       attractPullInPct: null,
+      homeVotes: 0,
+      interactions: 0,
+      polls: buildPollStats(new Map(), opts),
     };
   }
 
@@ -488,6 +640,12 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
   // Closed periods only (not raw events), so memory stays flat regardless of event count;
   // clipped into per-bucket attractMs below once bucketMs/startMs/numBuckets are known.
   const attractPeriods: { fromMs: number; toMs: number }[] = [];
+
+  // ---- polls and ratings (feature G) ----
+  // count of `vote` events with no visit_id: an unlinked Home vote (decision 4).
+  let homeVotes = 0;
+  // poll -> choice -> vote count, across both home and visit votes.
+  const pollCounts = new Map<string, Map<string, number>>();
 
   // open visits: visit_id -> { buttonId, ts }
   const openVisits = new Map<string, { buttonId: string; ts: string }>();
@@ -715,6 +873,17 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
         openPath.currentSlide = ev.slide_to;
         openPath.lastArrivalMs = nowMs;
       }
+    } else if (ev.event === 'vote' && ev.poll !== undefined && ev.choice !== undefined) {
+      // Every vote counts toward Poll results (home and destination alike, decision 4); only
+      // a vote with no visit_id is a home-slide vote, since a destination-slide vote and a
+      // linked home vote both carry the visit's visit_id.
+      if (!ev.visit_id) homeVotes += 1;
+      let choices = pollCounts.get(ev.poll);
+      if (!choices) {
+        choices = new Map();
+        pollCounts.set(ev.poll, choices);
+      }
+      choices.set(ev.choice, (choices.get(ev.choice) ?? 0) + 1);
     }
   }
 
@@ -816,6 +985,8 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
   const uptime = computeUptime(sorted);
   const uptimePct = uptimePctOf(uptime);
   const attractPullInPct = attractStarts > 0 ? (attractEnds / attractStarts) * 100 : null;
+  const interactions = totalVisits + homeVotes;
+  const polls = buildPollStats(pollCounts, opts);
 
   return {
     sessionId,
@@ -844,5 +1015,8 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
     attractStarts,
     attractEnds,
     attractPullInPct,
+    homeVotes,
+    interactions,
+    polls,
   };
 }

@@ -520,3 +520,169 @@ describe('SetupScreen: attract loop settings', () => {
     screen.destroy();
   });
 });
+
+describe('SetupScreen: poll labels', () => {
+  function makePollDeck() {
+    return deck({
+      slides: [slide({ index: 1 }), slide({ index: 2 })],
+      buttons: [
+        { id: 'b1', shapeName: 'BTN_A', text: 'A', defaultLabel: 'A', targetSlide: 2, bounds: { x: 0, y: 0, w: 200, h: 200 } },
+        { id: 'b2', shapeName: 'BTN_B', text: 'B', defaultLabel: 'B', targetSlide: 2, bounds: { x: 0, y: 0, w: 200, h: 200 } },
+      ],
+      homeLinks: [{ slide: 2, id: 'h1', bounds: { x: 0, y: 0, w: 50, h: 50 } }],
+      pollOptions: [
+        {
+          slide: 1,
+          id: 'v1',
+          shapeName: 'VOTE_Mood_Happy',
+          poll: 'Mood',
+          choice: 'Happy',
+          kind: 'vote' as const,
+          label: 'Happy',
+          bounds: { x: 400, y: 400, w: 100, h: 60 },
+          linked: false,
+        },
+        {
+          slide: 1,
+          id: 'v2',
+          shapeName: 'VOTE_Mood_Sad',
+          poll: 'Mood',
+          choice: 'Sad',
+          kind: 'vote' as const,
+          label: 'Sad',
+          bounds: { x: 500, y: 400, w: 100, h: 60 },
+          linked: false,
+        },
+      ],
+    });
+  }
+
+  it('does not show a "Poll labels" section for a deck with no poll options', () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+    const headings = Array.from(container.querySelectorAll('[data-step="configure"] h3')).map((h) => h.textContent);
+    expect(headings).not.toContain('Poll labels');
+    screen.destroy();
+  });
+
+  it('lists each poll option with its default label, and saves an admin rename', () => {
+    vi.useFakeTimers();
+    try {
+      const saveConfig = vi.spyOn(store, 'saveConfig').mockResolvedValue();
+      const container = document.createElement('div');
+      const screen = new SetupScreen({ container, initialDeck: makePollDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+      const headings = Array.from(container.querySelectorAll('[data-step="configure"] h3')).map((h) => h.textContent);
+      expect(headings).toContain('Poll labels');
+
+      const inputs = Array.from(
+        container.querySelectorAll<HTMLInputElement>('[data-step="configure"] .field-list input[type="text"]'),
+      );
+      const happyInput = inputs.find((i) => i.value === 'Happy');
+      expect(happyInput).toBeTruthy();
+
+      happyInput!.value = 'Delighted';
+      happyInput!.dispatchEvent(new Event('input'));
+      vi.advanceTimersByTime(400);
+
+      expect(saveConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ pollLabels: expect.objectContaining({ ['Mood\u0000Happy']: 'Delighted' }) }),
+      );
+      screen.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('updates the preview outline label in place as a poll label is typed, without a full re-render', async () => {
+    vi.useFakeTimers();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    try {
+      const saveConfig = vi.spyOn(store, 'saveConfig').mockResolvedValue();
+      const screen = new SetupScreen({ container, initialDeck: makePollDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+      await flushMicrotasks();
+
+      const inputs = Array.from(
+        container.querySelectorAll<HTMLInputElement>('[data-step="configure"] .field-list input[type="text"]'),
+      );
+      const happyInput = inputs.find((i) => i.value === 'Happy')!;
+      expect(happyInput).toBeTruthy();
+
+      // The preview is already showing slide 1 (the deck's Home poll option's own slide).
+      const outline = container.querySelector<HTMLElement>('.preview-stage .preview-poll-outline')!;
+      expect(outline).toBeTruthy();
+      expect(outline.querySelector('.preview-btn-label')?.textContent).toBe('Mood: Happy');
+
+      happyInput.value = 'Delighted';
+      happyInput.dispatchEvent(new Event('input'));
+
+      // Same input, same outline element: a typed edit refreshes only errors/Go-live, not a
+      // full render (which would replace the focused input and remount the preview).
+      expect(happyInput.isConnected).toBe(true);
+      expect(outline.isConnected).toBe(true);
+      expect(outline.querySelector('.preview-btn-label')?.textContent).toBe('Mood: Delighted');
+      expect(
+        container.querySelectorAll<HTMLInputElement>('[data-step="configure"] .field-list input[type="text"]')[
+          inputs.indexOf(happyInput)
+        ],
+      ).toBe(happyInput);
+
+      vi.advanceTimersByTime(400);
+      expect(saveConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ pollLabels: expect.objectContaining({ ['Mood\u0000Happy']: 'Delighted' }) }),
+      );
+      screen.destroy();
+    } finally {
+      container.remove();
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows an admin-renamed label from initialConfig.pollLabels', () => {
+    const container = document.createElement('div');
+    const initialConfig = { ...defaultConfig('deck.pptx'), pollLabels: { ['Mood\u0000Sad']: 'Unhappy' } };
+    const screen = new SetupScreen({ container, initialDeck: makePollDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+    const inputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>('[data-step="configure"] .field-list input[type="text"]'),
+    );
+    expect(inputs.some((i) => i.value === 'Unhappy')).toBe(true);
+    screen.destroy();
+  });
+});
+
+describe('SetupScreen: preview outlines poll options', () => {
+  function makePollDeck() {
+    return deck({
+      slides: [slide({ index: 1 })],
+      buttons: [
+        { id: 'b1', shapeName: 'BTN_A', text: 'A', defaultLabel: 'A', targetSlide: 2, bounds: { x: 0, y: 0, w: 200, h: 200 } },
+        { id: 'b2', shapeName: 'BTN_B', text: 'B', defaultLabel: 'B', targetSlide: 2, bounds: { x: 0, y: 0, w: 200, h: 200 } },
+      ],
+      pollOptions: [
+        {
+          slide: 1,
+          id: 'v1',
+          shapeName: 'VOTE_Mood_Happy',
+          poll: 'Mood',
+          choice: 'Happy',
+          kind: 'vote' as const,
+          label: 'Happy',
+          bounds: { x: 400, y: 400, w: 100, h: 60 },
+          linked: false,
+        },
+      ],
+    });
+  }
+
+  it('outlines a poll option distinctly (dashed) and labels it "poll: label"', async () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makePollDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+    await flushMicrotasks();
+
+    const outline = container.querySelector('.preview-poll-outline');
+    expect(outline).toBeTruthy();
+    expect(outline?.querySelector('.preview-btn-label')?.textContent).toBe('Mood: Happy');
+    screen.destroy();
+  });
+});

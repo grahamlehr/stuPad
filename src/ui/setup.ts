@@ -2,8 +2,8 @@
  * Setup screen: one scrolling screen with five steps (SPEC "Admin setup flow"):
  * Load -> Check -> Preview -> Configure -> Go live.
  */
-import type { Deck, Issue, KioskConfig, ButtonDef, Rect, GlowConfig, AttractConfig } from '../types';
-import { defaultConfig, GLOW_INTENSITY_MIN, GLOW_INTENSITY_MAX, GLOW_PERIOD_MIN_MS, GLOW_PERIOD_MAX_MS } from '../types';
+import type { Deck, Issue, KioskConfig, ButtonDef, PollOptionDef, Rect, GlowConfig, AttractConfig } from '../types';
+import { defaultConfig, pollLabelKey, GLOW_INTENSITY_MIN, GLOW_INTENSITY_MAX, GLOW_PERIOD_MIN_MS, GLOW_PERIOD_MAX_MS } from '../types';
 import { parsePptx, validateDeck } from '../pptx';
 import { SlideStage, renderThumbnail, rasterizeDeck, releaseThumbnails } from '../render';
 import { checklist, acquireWakeLock } from '../kiosk';
@@ -83,6 +83,10 @@ const ISSUE_LABELS: Record<Issue['code'], string> = {
   too_large: 'File too large',
   small_button: 'Small button',
   self_link: 'Self link',
+  poll_single_option: 'Poll has one option',
+  poll_duplicate_choice: 'Duplicate poll choice',
+  poll_bad_rating: 'Non-numeric rating choice',
+  poll_mixed_kind: 'Poll mixes vote and rating',
 };
 
 export class SetupScreen {
@@ -383,21 +387,53 @@ export class SetupScreen {
     if (this.previewSlide === 1) {
       for (const button of this.deck.buttons) {
         const label = this.config.buttonLabels[button.id] ?? button.defaultLabel;
-        this.addPreviewOutline(overlay, button.bounds, label, () => this.showPreviewSlide(button.targetSlide), button.id);
+        this.addPreviewOutline(overlay, button.bounds, label, () => this.showPreviewSlide(button.targetSlide), {
+          buttonId: button.id,
+        });
       }
-      return;
+    } else {
+      // Destination slides: outline any onward nav links the same way, so "Tapping a
+      // button in preview navigates as it will in kiosk mode" (SPEC) also covers chained
+      // slides, not just the home <-> destination pair.
+      for (const nav of this.deck.navLinks ?? []) {
+        if (nav.slide !== this.previewSlide) continue;
+        this.addPreviewOutline(overlay, nav.bounds, nav.label, () => this.showPreviewSlide(nav.targetSlide));
+      }
+      for (const back of this.deck.backLinks ?? []) {
+        if (back.slide !== this.previewSlide) continue;
+        this.addPreviewOutline(overlay, back.bounds, back.label, () => this.previewGoBack());
+      }
     }
-    // Destination slides: outline any onward nav links the same way, so "Tapping a
-    // button in preview navigates as it will in kiosk mode" (SPEC) also covers chained
-    // slides, not just the home <-> destination pair.
-    for (const nav of this.deck.navLinks ?? []) {
-      if (nav.slide !== this.previewSlide) continue;
-      this.addPreviewOutline(overlay, nav.bounds, nav.label, () => this.showPreviewSlide(nav.targetSlide));
+
+    // Poll/rating options can sit on any slide, including Home alongside buttons (ROADMAP
+    // "Polls and ratings"); outlined distinctly (dashed) and labelled "poll: choice".
+    // Tapping one in preview follows its link exactly as the kiosk would, without logging.
+    for (const opt of this.deck.pollOptions ?? []) {
+      if (opt.slide !== this.previewSlide) continue;
+      const label = `${this.pollLabel(opt)}: ${this.pollChoiceLabel(opt)}`;
+      this.addPreviewOutline(
+        overlay,
+        opt.bounds,
+        label,
+        () => {
+          if (!opt.linked) return;
+          if (opt.targetSlide !== undefined) this.showPreviewSlide(opt.targetSlide);
+          else this.previewGoBack();
+        },
+        { extraClass: 'preview-poll-outline', pollKey: pollLabelKey(opt.poll, opt.choice) },
+      );
     }
-    for (const back of this.deck.backLinks ?? []) {
-      if (back.slide !== this.previewSlide) continue;
-      this.addPreviewOutline(overlay, back.bounds, back.label, () => this.previewGoBack());
-    }
+  }
+
+  /** Display name for a poll (the raw poll segment, prettified the same way choice labels are). */
+  private pollLabel(opt: PollOptionDef): string {
+    const stripped = opt.poll.replace(/[_-]+/g, ' ').trim();
+    return stripped || opt.poll;
+  }
+
+  /** A poll option's choice label, honouring an admin rename from Configure. */
+  private pollChoiceLabel(opt: PollOptionDef): string {
+    return this.config.pollLabels[pollLabelKey(opt.poll, opt.choice)] ?? opt.label;
   }
 
   /** Mirrors the kiosk's "Last Slide Viewed": previous slide of this preview visit, else Home. */
@@ -407,16 +443,26 @@ export class SetupScreen {
     this.showPreviewSlide(target, false);
   }
 
-  private addPreviewOutline(overlay: HTMLElement, bounds: Rect, label: string, onTap: () => void, buttonId?: string): void {
-    const box = h('div', { class: 'preview-btn-outline', style: { pointerEvents: 'auto' } }, [
-      h('span', { class: 'preview-btn-label' }, [label]),
-    ]);
+  private addPreviewOutline(
+    overlay: HTMLElement,
+    bounds: Rect,
+    label: string,
+    onTap: () => void,
+    opts: { buttonId?: string; pollKey?: string; extraClass?: string } = {},
+  ): void {
+    const { buttonId, pollKey, extraClass } = opts;
+    const box = h(
+      'div',
+      { class: `preview-btn-outline${extraClass ? ` ${extraClass}` : ''}`, style: { pointerEvents: 'auto' } },
+      [h('span', { class: 'preview-btn-label' }, [label])],
+    );
     box.style.position = 'absolute';
     box.style.left = `${bounds.x}px`;
     box.style.top = `${bounds.y}px`;
     box.style.width = `${bounds.w}px`;
     box.style.height = `${bounds.h}px`;
     if (buttonId !== undefined) box.dataset.buttonId = buttonId;
+    if (pollKey !== undefined) box.dataset.pollKey = pollKey;
     box.addEventListener('click', onTap);
     overlay.appendChild(box);
   }
@@ -426,6 +472,16 @@ export class SetupScreen {
     const outlines = this.previewStage?.overlay.querySelectorAll<HTMLElement>('.preview-btn-outline') ?? [];
     for (const box of outlines) {
       if (box.dataset.buttonId !== buttonId) continue;
+      const span = box.querySelector('.preview-btn-label');
+      if (span) span.textContent = label;
+    }
+  }
+
+  /** Updates a poll option's outline label in the live preview in place, as its label field is typed. */
+  private updatePreviewPollLabel(pollKey: string, label: string): void {
+    const outlines = this.previewStage?.overlay.querySelectorAll<HTMLElement>('.preview-poll-outline') ?? [];
+    for (const box of outlines) {
+      if (box.dataset.pollKey !== pollKey) continue;
       const span = box.querySelector('.preview-btn-label');
       if (span) span.textContent = label;
     }
@@ -524,6 +580,8 @@ export class SetupScreen {
 
       h('h3', {}, ['Button labels']),
       h('div', { class: 'field-list' }, buttonLabelRows),
+
+      this.pollLabelFields(cfg, edit),
 
       h('h3', {}, ['Return-to-home timeout']),
       h('label', { class: 'checkbox-row' }, [
@@ -784,6 +842,35 @@ export class SetupScreen {
     }
 
     return h('div', { class: 'attract-fields' }, [h('h3', {}, ['Attract loop']), toggle, h('div', { class: 'field-list' }, fields)]);
+  }
+
+  /**
+   * "Poll labels" section (ROADMAP "Polls and ratings"): one renameable text input per poll
+   * option, like Button labels, keyed by `pollLabelKey(poll, choice)`. Only shown when the
+   * deck actually has poll options, so a deck without polls looks exactly as it did before.
+   */
+  private pollLabelFields(cfg: KioskConfig, edit: (p: Partial<KioskConfig>) => void): HTMLElement | null {
+    const options = this.deck?.pollOptions ?? [];
+    if (options.length === 0) return null;
+
+    const rows = options.map((opt) => {
+      const key = pollLabelKey(opt.poll, opt.choice);
+      return h('label', { class: 'field-row' }, [
+        h('span', {}, [`${this.pollLabel(opt)}: ${opt.label}`]),
+        h('input', {
+          type: 'text',
+          value: cfg.pollLabels[key] ?? opt.label,
+          // Typed, so it edits in place (see `edit` in renderConfigureStep) and keeps focus.
+          oninput: (e: Event) => {
+            const label = (e.target as HTMLInputElement).value;
+            edit({ pollLabels: { ...this.config.pollLabels, [key]: label } });
+            this.updatePreviewPollLabel(key, `${this.pollLabel(opt)}: ${label}`);
+          },
+        }),
+      ]);
+    });
+
+    return h('div', {}, [h('h3', {}, ['Poll labels']), h('div', { class: 'field-list' }, rows)]);
   }
 
   private checkboxField(label: string, checked: boolean, onChange: (v: boolean) => void): HTMLElement {
