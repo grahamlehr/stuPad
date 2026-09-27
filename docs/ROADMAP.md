@@ -25,7 +25,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 
 ---
 
-## A. Setup controls and hint text (item 4)
+## A. Setup controls and hint text (item 4) (done in 1.2.6)
 
 **Goal.** Expose the two `KioskConfig` fields that have no control, and make the exit hint describe the selected pattern.
 

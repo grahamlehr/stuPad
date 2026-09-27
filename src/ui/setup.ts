@@ -35,6 +35,29 @@ export const GLOW_SWATCHES: { color: string; name: string }[] = [
   { color: '#6b7cff', name: 'Blue' },
 ];
 
+/** Options for the Transition "Length" select (`KioskConfig.transitionMs`). */
+const TRANSITION_MS_OPTIONS = [150, 300, 500, 800];
+
+/** Options for the Secret exit sequence "Window" select (`KioskConfig.secretWindowMs`). */
+const SECRET_WINDOW_MS_OPTIONS = [3000, 5000, 8000, 10000];
+
+/**
+ * Describes what to tap for each `SecretPattern`, in the exact corner order the
+ * `SecretSequenceDetector` in src/kiosk/index.ts expects (its `SECRET_PATTERNS` map).
+ * Kept as a small literal here rather than importing that map, since it's UI copy, not
+ * detector logic.
+ */
+const SECRET_PATTERN_HINTS: Record<KioskConfig['secretPattern'], string> = {
+  corners_cw: 'Tap top-left, top-right, bottom-right, then bottom-left',
+  corners_ccw: 'Tap top-left, bottom-left, bottom-right, then top-right',
+  tl3_br2: 'Tap top-left three times, then bottom-right twice',
+};
+
+/** Hint text under "Secret exit sequence", reflecting the selected pattern and window. */
+function secretSequenceHint(pattern: KioskConfig['secretPattern'], windowMs: number): string {
+  return `${SECRET_PATTERN_HINTS[pattern]}, within ${windowMs / 1000} seconds, on any slide.`;
+}
+
 const ISSUE_LABELS: Record<Issue['code'], string> = {
   unreadable_file: 'Could not read the file',
   too_few_buttons: 'Not enough buttons',
@@ -500,6 +523,12 @@ export class SetupScreen {
 
       h('h3', {}, ['Transition']),
       this.selectField(cfg.transition, ['none', 'fade'], (v) => update({ transition: v as KioskConfig['transition'] })),
+      cfg.transition === 'fade'
+        ? h('label', { class: 'field-row' }, [
+            h('span', {}, ['Length']),
+            this.numberSelectField(cfg.transitionMs, TRANSITION_MS_OPTIONS, (v) => update({ transitionMs: v }), (v) => `${v} ms`),
+          ])
+        : null,
 
       h('h3', {}, ['Debounce (ms)']),
       h('input', {
@@ -510,7 +539,7 @@ export class SetupScreen {
       }),
 
       h('h3', {}, ['Secret exit sequence']),
-      h('p', { class: 'muted' }, ['Tap the four corners in this order, within 5 seconds, on any slide.']),
+      h('p', { class: 'muted' }, [secretSequenceHint(cfg.secretPattern, cfg.secretWindowMs)]),
       this.selectField(
         cfg.secretPattern,
         ['corners_cw', 'corners_ccw', 'tl3_br2'],
@@ -521,6 +550,10 @@ export class SetupScreen {
           tl3_br2: 'Top-left ×3, bottom-right ×2',
         },
       ),
+      h('label', { class: 'field-row' }, [
+        h('span', {}, ['Window']),
+        this.numberSelectField(cfg.secretWindowMs, SECRET_WINDOW_MS_OPTIONS, (v) => update({ secretWindowMs: v }), (v) => `${v / 1000} s`),
+      ]),
 
       h('h3', {}, ['Admin PIN (optional)']),
       this.pinFields(cfg, update),
@@ -639,6 +672,25 @@ export class SetupScreen {
       'select',
       { onchange: (e: Event) => onChange((e.target as HTMLSelectElement).value) },
       options.map((o) => h('option', { value: o, selected: o === value }, [labels?.[o] ?? o])),
+    );
+  }
+
+  /**
+   * Like `selectField` but for a fixed list of numeric options. A stored config can hold
+   * a value outside the list (an older build, or hand-set). The select must still show
+   * it rather than silently changing it, so it's added as an extra option when missing.
+   */
+  private numberSelectField(
+    value: number,
+    options: number[],
+    onChange: (v: number) => void,
+    formatLabel: (v: number) => string,
+  ): HTMLElement {
+    const opts = options.includes(value) ? options : [...options, value].sort((a, b) => a - b);
+    return h(
+      'select',
+      { onchange: (e: Event) => onChange(Number((e.target as HTMLSelectElement).value)) },
+      opts.map((o) => h('option', { value: String(o), selected: o === value }, [formatLabel(o)])),
     );
   }
 
