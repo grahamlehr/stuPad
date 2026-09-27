@@ -36,7 +36,7 @@ npm run dev          # Vite dev server on the LAN (open on the iPad via the Mac'
 npm test             # vitest (jsdom + fake-indexeddb)
 npm run typecheck
 npm run build        # typecheck + production build to dist/
-npm run template     # regenerate public/template.pptx and tests/fixtures/*.pptx
+npm run template     # regenerate tests/fixtures/*.pptx (also overwrites the hand-edited public/template.pptx)
 npm run fonts        # re-download the bundled web fonts into public/fonts and regenerate the manifest
 ```
 
