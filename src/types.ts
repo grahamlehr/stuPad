@@ -308,6 +308,14 @@ export interface KioskConfig {
    * existed won't have it; the store normalises a missing value to `defaultGlow()`.
    */
   glow: GlowConfig;
+  /**
+   * Free text identifying which physical iPad this is (e.g. "Stand A"), printed in the PDF
+   * header so reports from different stands can be told apart. Describes the device, not the
+   * deck, so loading a new deck keeps the previous value instead of resetting it (the one
+   * exception to "loading a new deck resets every setting to its default", see SPEC). Configs
+   * saved before this field existed won't have it; the store normalises a missing value to `''`.
+   */
+  deviceName: string;
 }
 
 export interface GlowConfig {
@@ -346,6 +354,7 @@ export function defaultConfig(fileName: string, now = new Date()): KioskConfig {
     adminPin: null,
     useRaster: false,
     glow: defaultGlow(),
+    deviceName: '',
   };
 }
 
@@ -368,7 +377,8 @@ export type EventType =
   | 'app_resume'
   | 'admin_unlock_fail'
   | 'log_cleared'
-  | 'slide_nav';
+  | 'slide_nav'
+  | 'heartbeat';
 
 export type ReturnMethod = 'home_button' | 'tap' | 'timeout';
 

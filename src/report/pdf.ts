@@ -13,6 +13,7 @@ import {
   drawTapHeatmap,
   drawSlideTimeChart,
   drawPathTable,
+  drawUptimeStrip,
   type NamedValue,
   type ActivityChartData,
   type HeatmapChartData,
@@ -20,6 +21,7 @@ import {
   type SlideTimeChartData,
   type PathTableData,
   type PathTableEntry,
+  type UptimeStripData,
 } from './charts';
 
 const PAGE_W = 297; // A4 landscape, mm
@@ -112,15 +114,15 @@ function drawPageTitle(doc: jsPDF, title: string): void {
   doc.text(title, MARGIN, MARGIN + 4);
 }
 
-function addFooters(doc: jsPDF, sessionName: string, generatedAt: string): void {
+function addFooters(doc: jsPDF, sessionName: string, deviceName: string, generatedAt: string): void {
   const n = doc.getNumberOfPages();
   for (let i = 1; i <= n; i++) {
     doc.setPage(i);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(130, 130, 130);
-    const text = `GGPad · ${sessionName} · page ${i}/${n} · generated ${generatedAt}`;
-    doc.text(text, PAGE_W / 2, PAGE_H - 7, { align: 'center' });
+    const parts = ['GGPad', ...(deviceName ? [deviceName] : []), sessionName, `page ${i}/${n}`, `generated ${generatedAt}`];
+    doc.text(parts.join(' · '), PAGE_W / 2, PAGE_H - 7, { align: 'center' });
   }
 }
 
@@ -219,6 +221,7 @@ export async function buildPdf(
   const colorForId = (id: string): string => colorOf.get(id) ?? buttonColor(stats.buttons.findIndex((b) => b.id === id));
 
   const sessionName = config.sessionName || 'GGPad session';
+  const deviceName = (config.deviceName ?? '').trim();
   const now = new Date();
   const generatedAt = formatTs(now.toISOString());
 
@@ -232,7 +235,9 @@ export async function buildPdf(
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(13);
   doc.setTextColor(60, 60, 60);
-  doc.text(sessionName, MARGIN, MARGIN + 14);
+  // Device name (when set) tells reports from different stands apart; shown right next to
+  // the session name here, and in every page's footer (see addFooters).
+  doc.text(deviceName ? `${sessionName} · ${deviceName}` : sessionName, MARGIN, MARGIN + 14);
 
   if (isEmpty) {
     doc.setFont('helvetica', 'normal');
@@ -259,6 +264,7 @@ export async function buildPdf(
       [fmtDuration(stats.avgDwellMs), 'Average dwell'],
       [String(stats.missTaps), 'Miss taps'],
       [String(stats.buttons.length), 'Buttons'],
+      [stats.uptimePct !== null ? `${Math.round(stats.uptimePct)}%` : 'n/a', 'Uptime'],
     ];
     if (stats.totalNavTaps > 0) tiles.push([String(stats.totalNavTaps), 'Onward nav taps']);
     const afterTilesY = drawStatTiles(doc, MARGIN, contentTop + 10, statsW, tiles, 3);
@@ -366,8 +372,25 @@ export async function buildPdf(
       })),
       series: stats.buttons.map((b) => ({ id: b.id, label: b.label, color: colorForId(b.id) })),
     };
-    const activityUrl = renderChartImage(drawActivityChart, activityData, 1600, 700, fontScaleFor(1600, CONTENT_W, 10));
-    placeImage(doc, activityUrl, 1600, 700, MARGIN, MARGIN + 18, CONTENT_W);
+    // Same fontScale for the chart and the strip below it: drawUptimeStrip derives its
+    // margins from the same formula drawActivityChart uses, so passing this value to both
+    // (at the same 1600px css width and the same CONTENT_W placed width) keeps their time
+    // axes pixel-aligned.
+    const activityFontScale = fontScaleFor(1600, CONTENT_W, 10);
+    const activityUrl = renderChartImage(drawActivityChart, activityData, 1600, 700, activityFontScale);
+    const activityH = placeImage(doc, activityUrl, 1600, 700, MARGIN, MARGIN + 18, CONTENT_W);
+
+    // Uptime strip: same time axis as the activity chart above it (first bucket's start to
+    // last bucket's end), so a downtime gap lines up with the quiet period it explains.
+    const uptimeStripData: UptimeStripData = {
+      startMs: Date.parse(stats.buckets[0].start),
+      endMs: Date.parse(stats.buckets[stats.buckets.length - 1].end),
+      spans: stats.uptime.spans,
+      gaps: stats.uptime.gaps,
+    };
+    const uptimeUrl = renderChartImage(drawUptimeStrip, uptimeStripData, 1600, 110, activityFontScale);
+    placeImage(doc, uptimeUrl, 1600, 110, MARGIN, MARGIN + 18 + activityH + 6, CONTENT_W);
+
     drawLegend(doc, stats.buttons.map((b) => ({ label: b.label, color: colorForId(b.id) })), MARGIN, PAGE_H - MARGIN - 6);
 
     // ---------------------------------------------------------------- page: Return behaviour (5th when Home slide taps is shown)
@@ -448,7 +471,7 @@ export async function buildPdf(
     }
   }
 
-  addFooters(doc, sessionName, generatedAt);
+  addFooters(doc, sessionName, deviceName, generatedAt);
 
   return doc.output('blob');
 }

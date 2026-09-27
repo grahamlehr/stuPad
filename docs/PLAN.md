@@ -19,7 +19,7 @@ This is the build plan the app was created from: stack, module ownership and pub
 | `src/render/` | Agent B (1) | Deck model → DOM at SLIDE_W x height, stage that letterboxes to screen, thumbnails, raster fallback | see below |
 | `src/store/`, `src/kiosk/` | Agent C (1) | IndexedDB persistence + append-only log; kiosk runtime state machine | see below |
 | `src/report/` | Agent D (1) | Stats, CSV, PDF (charts on canvas), share-sheet export | see below |
-| `src/ui/`, `src/main.ts`, `src/styles.css`, `public/` | Agent E (2) | Setup screen, admin panel, PIN pad, checklist, Clear previous data dialog, routing, PWA icons, resume-on-launch | — |
+| `src/ui/`, `src/main.ts`, `src/styles.css`, `public/` | Agent E (2) | Setup screen, admin panel, PIN pad, checklist, Clear previous data dialog, routing, PWA icons, resume-on-launch, heartbeat timer | `startHeartbeat(log, intervalMs?): () => void` and `HEARTBEAT_INTERVAL_MS` (`src/ui/heartbeat.ts`); everything else is internal to `App`/the screens |
 
 Phase 1 agents run in parallel on disjoint directories. Phase 2 integrates. Phase 3: review + fix.
 
@@ -53,7 +53,7 @@ export function rasterizeSlide(deck: Deck, index: number, widthPx?: number): Pro
 
 ```ts
 saveDeck(deck), loadDeck(): Promise<Deck|undefined>, deleteDeck()
-saveConfig(cfg), loadConfig(): Promise<KioskConfig|undefined>
+saveConfig(cfg), loadConfig(): Promise<KioskConfig|undefined>  // defaults glow/deviceName for a config saved before those fields existed
 getKioskState(): Promise<KioskState>, setKioskState(s)
 appendEvent(e: LogEvent): Promise<number>        // durable once resolved (tx 'complete'); calls are serialised so ids follow call order
 getEvents(f?: EventFilter): Promise<LogEvent[]>  // ordered by id
@@ -111,8 +111,18 @@ computeStats(events: LogEvent[], labels: Record<string,string>): ReportStats  //
 //   keyed by visit_id in an open-visits map, closed on return_home. It's orphaned instead (counted in
 //   paths as ended, left out of slideTime) on a new button_press, an app_resume/kiosk_start/kiosk_stop,
 //   or end of the event list. A slide_nav/return_home with no matching button_press is ignored.
-toCsv(events): string; csvFileName(sessionName, now): string
-buildPdf(events, deck, config, homeThumbPng?: Blob): Promise<Blob>   // A4 landscape, pages per SPEC; jsPDF is lazy-imported
+// ReportStats.uptime: UptimeStats = { uptimeMs, downtimeMs, unmonitoredMs, gaps: {from,to}[], spans: {from,to,monitored}[] }
+// ReportStats.uptimePct: number | null   // uptimeMs / (uptimeMs+downtimeMs) over monitored spans only; null when there are none
+//   computeUptime (a separate pass over the same sorted events, see src/report/stats.ts and ARCHITECTURE
+//   section 7 for the full span/gap semantics) reconstructs running spans: kiosk_start opens one, and so
+//   does any other event when none is open (kiosk_stop is the one exception), since an event with no span
+//   open means the scope cut off the kiosk_start that would have opened it. A span is "monitored" only if
+//   it contains a heartbeat (i.e. logged by 1.5.0+); an unmonitored span's whole duration goes to
+//   unmonitoredMs instead of uptimeMs/downtimeMs/gaps. Inside a monitored span, a gap over UPTIME_GAP_MS
+//   (20 min) between consecutive events is downtime, everything else is uptime. heartbeat events take
+//   part in this pass, and extend firstTs/lastTs like any event, but never affect isMultiDay or any count.
+toCsv(events): string; csvFileName(sessionName, now): string   // heartbeat rows included like any other event, no extra columns
+buildPdf(events, deck, config, homeThumbPng?: Blob): Promise<Blob>   // A4 landscape, pages per SPEC; jsPDF is lazy-imported; config.deviceName (trimmed), when set, is shown on Summary and in every footer
 pdfFileName(sessionName, now): string                                // same <session>_<yyyy-mm-dd-hhmm> pattern as csvFileName
 exportFile(file: File): Promise<'shared'|'downloaded'|'cancelled'>   // navigator.share({files}) → fallback <a download>
 buttonColor(i: number): string    // consistent palette across all charts
@@ -121,6 +131,7 @@ draw*Chart(ctx, width, height, data, fontScale?)  // donut, dwell bar, activity,
 drawTapHeatmap(ctx, w, h, { grid, buttons, deckHeight, thumbnail? }, fontScale?)  // home-slide miss-tap grid + button outlines, thumbnail optional (src/report/charts.ts)
 drawSlideTimeChart(ctx, w, h, { entries: { slide, medianMs, medianMsExclTimeout }[] }, fontScale?)  // paired horizontal bars, median time per slide; caps at the 16 busiest slides (by stays, then ascending slide order) with a "+N more" note (src/report/charts.ts)
 drawPathTable(ctx, w, h, { entries: { path, count, pct, ended, label? }[] }, fontScale?)  // "3 → 4 → 5" style table drawn on canvas, so the arrow renders (jsPDF's Helvetica can't); caller does the top-8/"Other" bucketing (src/report/charts.ts)
+drawUptimeStrip(ctx, w, h, { startMs, endMs, spans: {from,to,monitored}[], gaps }, fontScale?)  // thin up/down strip, same time axis as drawActivityChart (shares its marginL/marginR formula so the two line up when given the same fontScale); green/red/grey for running/down/stopped, neutral grey for an unmonitored span, with a legend that adds "No heartbeat data" only when one is present (src/report/charts.ts)
 ```
 
 ## Conventions

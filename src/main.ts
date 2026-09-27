@@ -16,6 +16,7 @@ import { SetupScreen } from './ui/setup';
 import { AdminPanel } from './ui/admin';
 import { PinPad } from './ui/pinpad';
 import { decideStartupScreen } from './ui/lifecycle';
+import { startHeartbeat } from './ui/heartbeat';
 import { isoLocal, uuid } from './util';
 
 type Screen = 'setup' | 'kiosk';
@@ -34,6 +35,8 @@ class App {
   private adminPanel: AdminPanel | null = null;
   private adminOverlayEl: HTMLElement | null = null;
   private pinPad: PinPad | null = null;
+  /** Stops the heartbeat interval; set while the kiosk is running, cleared on every exit path. */
+  private stopHeartbeat: (() => void) | null = null;
 
   constructor() {
     this.appRoot = document.getElementById('app')!;
@@ -138,6 +141,12 @@ class App {
       onAdminRequested: () => this.requestAdmin(),
     });
     await this.controller.start();
+
+    // enterKiosk can run twice without an intervening exitToSetup (launch-resume, then
+    // goLive on the same App instance never happens, but be defensive): stop any existing
+    // heartbeat before starting a new one so the interval is never duplicated.
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = startHeartbeat(() => this.log({ event: 'heartbeat' }));
   }
 
   private requestAdmin(): void {
@@ -187,6 +196,8 @@ class App {
 
   private async exitToSetup(): Promise<void> {
     this.log({ event: 'kiosk_stop' });
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = null;
     this.pinPad?.destroy();
     this.pinPad = null;
     this.closeAdmin();
@@ -207,6 +218,8 @@ class App {
    */
   private async clearAll(): Promise<void> {
     const sessionId = this.sessionId ?? uuid();
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = null;
     this.pinPad?.destroy();
     this.pinPad = null;
     this.closeAdmin();

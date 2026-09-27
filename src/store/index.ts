@@ -127,6 +127,8 @@ export async function loadConfig(): Promise<KioskConfig | undefined> {
   // A config saved before the glow setting existed won't have it; normalise here so every
   // other module can rely on it being present.
   if (cfg && !cfg.glow) cfg.glow = defaultGlow();
+  // Same shim for deviceName (added for the heartbeat/uptime feature): default to ''.
+  if (cfg && cfg.deviceName === undefined) cfg.deviceName = '';
   return cfg;
 }
 

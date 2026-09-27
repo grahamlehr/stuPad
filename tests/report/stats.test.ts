@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeStats, MISS_GRID_COLS, MISS_GRID_ROWS } from '../../src/report/stats';
+import { computeStats, MISS_GRID_COLS, MISS_GRID_ROWS, UPTIME_GAP_MS } from '../../src/report/stats';
 import type { LogEvent } from '../../src/types';
 
 const SID = 'sess-1';
@@ -320,6 +320,28 @@ describe('computeStats: multi-day / heatmap', () => {
   });
 });
 
+describe('computeStats: heartbeats and the report time range', () => {
+  it('a heartbeat tail past midnight does not flip a single-evening session to multi-day', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T23:00:00.000+00:00'),
+      heartbeat('2026-10-15T00:15:00.000+00:00'),
+      heartbeat('2026-10-15T00:30:00.000+00:00'),
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+    expect(stats.isMultiDay).toBe(false);
+  });
+
+  it('a heartbeat tail extends lastTs (and so the activity axis and bucket width) past the last real event', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T09:00:00.000+00:00'),
+      heartbeat('2026-10-14T09:15:00.000+00:00'),
+      heartbeat('2026-10-14T09:30:00.000+00:00'),
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+    expect(stats.lastTs).toBe('2026-10-14T09:30:00.000+00:00');
+  });
+});
+
 function nav(ts: string, opts: Partial<LogEvent> = {}): LogEvent {
   return {
     ts,
@@ -574,5 +596,306 @@ describe('computeStats: visitPaths (slide time and common paths)', () => {
     expect(stats.topPaths.map((p) => p.count)).toEqual([10, 9, 8, 7, 6, 5, 4, 3]);
     expect(stats.otherPaths).toBe(2);
     expect(stats.totalPaths).toBe(counts.reduce((s, n) => s + n, 0));
+  });
+});
+
+function heartbeat(ts: string): LogEvent {
+  return { ts, session_id: SID, event: 'heartbeat' };
+}
+
+describe('computeStats: uptime', () => {
+  it('empty log has zeroed uptime and null uptimePct', () => {
+    const stats = computeStats([], {});
+    expect(stats.uptime).toEqual({ uptimeMs: 0, downtimeMs: 0, unmonitoredMs: 0, gaps: [], spans: [] });
+    expect(stats.uptimePct).toBeNull();
+  });
+
+  it('a clean span with heartbeats is 100% up', () => {
+    const events: LogEvent[] = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      heartbeat('2026-10-14T09:15:00.000+00:00'),
+      heartbeat('2026-10-14T09:30:00.000+00:00'),
+      kioskEvent('kiosk_stop', '2026-10-14T09:45:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.uptime.downtimeMs).toBe(0);
+    expect(stats.uptime.unmonitoredMs).toBe(0);
+    expect(stats.uptime.gaps).toEqual([]);
+    expect(stats.uptime.uptimeMs).toBe(45 * 60_000);
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:45:00.000+00:00', monitored: true },
+    ]);
+    expect(stats.uptimePct).toBe(100);
+  });
+
+  it('a 30-minute silence inside a span is one downtime gap', () => {
+    const events: LogEvent[] = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      heartbeat('2026-10-14T09:15:00.000+00:00'),
+      // 30 minutes of silence: longer than UPTIME_GAP_MS (20 min)
+      heartbeat('2026-10-14T09:45:00.000+00:00'),
+      kioskEvent('kiosk_stop', '2026-10-14T09:46:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.uptime.gaps).toEqual([
+      { from: '2026-10-14T09:15:00.000+00:00', to: '2026-10-14T09:45:00.000+00:00' },
+    ]);
+    expect(stats.uptime.downtimeMs).toBe(30 * 60_000);
+    expect(stats.uptime.uptimeMs).toBe(16 * 60_000); // 15 min + 1 min
+    expect(stats.uptime.uptimeMs + stats.uptime.downtimeMs).toBe(46 * 60_000);
+  });
+
+  it('a gap of exactly UPTIME_GAP_MS is uptime, not downtime (strictly greater than the threshold counts as down)', () => {
+    const events: LogEvent[] = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      heartbeat('2026-10-14T09:00:01.000+00:00'),
+      kioskEvent('kiosk_stop', new Date(Date.parse('2026-10-14T09:00:00.000+00:00') + UPTIME_GAP_MS).toISOString()),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.uptime.gaps).toEqual([]);
+    expect(stats.uptime.downtimeMs).toBe(0);
+    expect(stats.uptime.uptimeMs).toBe(UPTIME_GAP_MS);
+  });
+
+  it('a span crossing midnight is computed by instant, not by calendar day', () => {
+    const events: LogEvent[] = [
+      kioskEvent('kiosk_start', '2026-10-14T23:50:00.000+00:00'),
+      heartbeat('2026-10-15T00:05:00.000+00:00'),
+      kioskEvent('kiosk_stop', '2026-10-15T00:10:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.uptime.gaps).toEqual([]);
+    expect(stats.uptime.downtimeMs).toBe(0);
+    expect(stats.uptime.uptimeMs).toBe(20 * 60_000);
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T23:50:00.000+00:00', to: '2026-10-15T00:10:00.000+00:00', monitored: true },
+    ]);
+  });
+
+  it('a kiosk_stop then kiosk_start 2 hours later is not downtime: the gap between spans is uncounted', () => {
+    const events: LogEvent[] = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      heartbeat('2026-10-14T09:02:00.000+00:00'),
+      kioskEvent('kiosk_stop', '2026-10-14T09:05:00.000+00:00'),
+      kioskEvent('kiosk_start', '2026-10-14T11:05:00.000+00:00'),
+      heartbeat('2026-10-14T11:07:00.000+00:00'),
+      kioskEvent('kiosk_stop', '2026-10-14T11:10:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.uptime.gaps).toEqual([]);
+    expect(stats.uptime.downtimeMs).toBe(0);
+    expect(stats.uptime.uptimeMs).toBe(10 * 60_000);
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:05:00.000+00:00', monitored: true },
+      { from: '2026-10-14T11:05:00.000+00:00', to: '2026-10-14T11:10:00.000+00:00', monitored: true },
+    ]);
+  });
+
+  it('a new kiosk_start while a span is still open (no matching kiosk_stop) closes the old span at its own last event', () => {
+    const events: LogEvent[] = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      heartbeat('2026-10-14T09:15:00.000+00:00'),
+      // no kiosk_stop: the app was killed and relaunched straight into a new session
+      kioskEvent('kiosk_start', '2026-10-14T12:00:00.000+00:00'),
+      heartbeat('2026-10-14T12:15:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:15:00.000+00:00', monitored: true },
+      { from: '2026-10-14T12:00:00.000+00:00', to: '2026-10-14T12:15:00.000+00:00', monitored: true },
+    ]);
+    // the 2h45m between the two spans is outside both, so it's neither up nor down
+    expect(stats.uptime.gaps).toEqual([]);
+    expect(stats.uptime.uptimeMs).toBe(30 * 60_000);
+    expect(stats.uptime.downtimeMs).toBe(0);
+  });
+
+  it('app_resume after a long silence inside an already-open span is downtime, not a new span', () => {
+    const events: LogEvent[] = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      heartbeat('2026-10-14T09:15:00.000+00:00'),
+      // app is killed/backgrounded; heartbeats stop; it relaunches 45 minutes later
+      resume('2026-10-14T10:00:00.000+00:00'),
+      heartbeat('2026-10-14T10:15:00.000+00:00'),
+      kioskEvent('kiosk_stop', '2026-10-14T10:20:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T10:20:00.000+00:00', monitored: true },
+    ]);
+    expect(stats.uptime.gaps).toEqual([
+      { from: '2026-10-14T09:15:00.000+00:00', to: '2026-10-14T10:00:00.000+00:00' },
+    ]);
+    expect(stats.uptime.downtimeMs).toBe(45 * 60_000);
+    expect(stats.uptime.uptimeMs).toBe(35 * 60_000); // 15 + 15 + 5
+  });
+
+  it('an app_resume with no span already open starts a new span', () => {
+    const events: LogEvent[] = [
+      resume('2026-10-14T09:00:00.000+00:00'),
+      heartbeat('2026-10-14T09:15:00.000+00:00'),
+      kioskEvent('kiosk_stop', '2026-10-14T09:20:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:20:00.000+00:00', monitored: true },
+    ]);
+    expect(stats.uptime.uptimeMs).toBe(20 * 60_000);
+    expect(stats.uptime.downtimeMs).toBe(0);
+  });
+
+  it('the log ending mid-span closes it at its own last event, with no kiosk_stop', () => {
+    const events: LogEvent[] = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      heartbeat('2026-10-14T09:15:00.000+00:00'),
+      heartbeat('2026-10-14T09:30:00.000+00:00'),
+      // the app was killed here: no kiosk_stop ever arrives
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:30:00.000+00:00', monitored: true },
+    ]);
+    expect(stats.uptime.uptimeMs).toBe(30 * 60_000);
+    expect(stats.uptime.downtimeMs).toBe(0);
+  });
+
+  it('an event with an unparseable ts is skipped entirely: no span change, no gap', () => {
+    const events: LogEvent[] = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      { ts: 'not-a-real-timestamp', session_id: SID, event: 'heartbeat' },
+      heartbeat('2026-10-14T09:15:00.000+00:00'),
+      kioskEvent('kiosk_stop', '2026-10-14T09:20:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:20:00.000+00:00', monitored: true },
+    ]);
+    expect(stats.uptime.gaps).toEqual([]);
+    expect(stats.uptime.uptimeMs).toBe(20 * 60_000);
+    expect(stats.uptime.downtimeMs).toBe(0);
+  });
+
+  it('kiosk_stop with no span open closes nothing and opens nothing', () => {
+    const events: LogEvent[] = [kioskEvent('kiosk_stop', '2026-10-14T09:00:00.000+00:00')];
+    const stats = computeStats(events, {});
+    expect(stats.uptime).toEqual({ uptimeMs: 0, downtimeMs: 0, unmonitoredMs: 0, gaps: [], spans: [] });
+  });
+
+  it('a scope that cuts off the kiosk_start opens a span at the first in-scope event instead of discarding it', () => {
+    // The heartbeats below have no kiosk_start before them in this scope (a date-range
+    // export, or a session log missing its own start): events are only ever logged while
+    // the kiosk runs, so they open a span themselves rather than being ignored.
+    const events: LogEvent[] = [
+      heartbeat('2026-10-14T08:00:00.000+00:00'),
+      heartbeat('2026-10-14T08:15:00.000+00:00'),
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      kioskEvent('kiosk_stop', '2026-10-14T09:05:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    // the leading heartbeats open their own span, which the later kiosk_start closes (at
+    // its own last event, same rule as any other span still open when kiosk_start arrives)
+    // before opening the "real" one
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T08:00:00.000+00:00', to: '2026-10-14T08:15:00.000+00:00', monitored: true },
+      { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:05:00.000+00:00', monitored: false },
+    ]);
+    expect(stats.uptime.uptimeMs).toBe(15 * 60_000);
+    expect(stats.uptime.downtimeMs).toBe(0);
+    // the second span has no heartbeat in it, so its 5 minutes are unmonitored, not uptime
+    expect(stats.uptime.unmonitoredMs).toBe(5 * 60_000);
+  });
+
+  it('a scope that cuts off the kiosk_start and has only taps (no heartbeat) opens an unmonitored span', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T09:00:00.000+00:00', { visit_id: 'v1' }),
+      ret('2026-10-14T09:05:00.000+00:00', { visit_id: 'v1', method: 'tap', dwell_ms: 300_000 }),
+      kioskEvent('kiosk_stop', '2026-10-14T09:10:00.000+00:00'),
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:10:00.000+00:00', monitored: false },
+    ]);
+    expect(stats.uptime.uptimeMs).toBe(0);
+    expect(stats.uptime.downtimeMs).toBe(0);
+    expect(stats.uptime.unmonitoredMs).toBe(10 * 60_000);
+    expect(stats.uptimePct).toBeNull();
+  });
+
+  it('an 8-hour pre-1.5.0 session with hourly taps and no heartbeats is unmonitored, not ~0% up', () => {
+    const events: LogEvent[] = [kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00')];
+    for (let h = 0; h <= 8; h++) {
+      events.push(press('b1', `2026-10-14T${String(9 + h).padStart(2, '0')}:00:00.000+00:00`, { visit_id: `v${h}` }));
+      events.push(ret(`2026-10-14T${String(9 + h).padStart(2, '0')}:00:05.000+00:00`, { visit_id: `v${h}`, method: 'tap', dwell_ms: 5000 }));
+    }
+    events.push(kioskEvent('kiosk_stop', '2026-10-14T17:00:10.000+00:00'));
+    const stats = computeStats(events, { b1: 'A' });
+
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T17:00:10.000+00:00', monitored: false },
+    ]);
+    expect(stats.uptime.uptimeMs).toBe(0);
+    expect(stats.uptime.downtimeMs).toBe(0);
+    expect(stats.uptime.gaps).toEqual([]);
+    expect(stats.uptime.unmonitoredMs).toBe(8 * 60 * 60_000 + 10_000);
+    expect(stats.uptimePct).toBeNull();
+  });
+
+  it('a mixed log with one old (unmonitored) span and one new (monitored) span computes uptime over the monitored span only', () => {
+    const events: LogEvent[] = [
+      // old-build span: no heartbeats, 2 hours
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      press('b1', '2026-10-14T09:30:00.000+00:00', { visit_id: 'v1' }),
+      ret('2026-10-14T09:30:05.000+00:00', { visit_id: 'v1', method: 'tap', dwell_ms: 5000 }),
+      kioskEvent('kiosk_stop', '2026-10-14T11:00:00.000+00:00'),
+      // new-build span: heartbeats present, 1 hour, one 25-minute gap
+      kioskEvent('kiosk_start', '2026-10-14T13:00:00.000+00:00'),
+      heartbeat('2026-10-14T13:15:00.000+00:00'),
+      heartbeat('2026-10-14T13:40:00.000+00:00'),
+      kioskEvent('kiosk_stop', '2026-10-14T14:00:00.000+00:00'),
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+
+    expect(stats.uptime.spans).toEqual([
+      { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T11:00:00.000+00:00', monitored: false },
+      { from: '2026-10-14T13:00:00.000+00:00', to: '2026-10-14T14:00:00.000+00:00', monitored: true },
+    ]);
+    expect(stats.uptime.unmonitoredMs).toBe(2 * 60 * 60_000);
+    // the 25-minute gap (13:15 -> 13:40) is downtime; the rest of the monitored span is up
+    expect(stats.uptime.gaps).toEqual([{ from: '2026-10-14T13:15:00.000+00:00', to: '2026-10-14T13:40:00.000+00:00' }]);
+    expect(stats.uptime.downtimeMs).toBe(25 * 60_000);
+    expect(stats.uptime.uptimeMs).toBe(35 * 60_000);
+    expect(stats.uptimePct).toBeCloseTo((35 / 60) * 100, 5);
+  });
+
+  it('heartbeats do not affect presses, visits or activity buckets', () => {
+    const withoutHeartbeats: LogEvent[] = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      press('b1', '2026-10-14T09:01:00.000+00:00', { visit_id: 'v1' }),
+      ret('2026-10-14T09:01:10.000+00:00', { visit_id: 'v1', method: 'tap', dwell_ms: 10_000 }),
+      kioskEvent('kiosk_stop', '2026-10-14T09:10:00.000+00:00'),
+    ];
+    const withHeartbeats: LogEvent[] = [
+      withoutHeartbeats[0],
+      heartbeat('2026-10-14T09:00:30.000+00:00'),
+      withoutHeartbeats[1],
+      withoutHeartbeats[2],
+      heartbeat('2026-10-14T09:05:00.000+00:00'),
+      withoutHeartbeats[3],
+    ];
+
+    const a = computeStats(withoutHeartbeats, { b1: 'A' });
+    const b = computeStats(withHeartbeats, { b1: 'A' });
+
+    expect(b.totalPresses).toBe(a.totalPresses);
+    expect(b.totalVisits).toBe(a.totalVisits);
+    expect(b.avgDwellMs).toBe(a.avgDwellMs);
+    expect(b.buttons).toEqual(a.buttons);
+    // buckets carry per-button counts only; heartbeats must not appear in any bucket's total
+    const totalBucketPresses = (stats: typeof a) => stats.buckets.reduce((s, bk) => s + bk.total, 0);
+    expect(totalBucketPresses(b)).toBe(totalBucketPresses(a));
+    expect(totalBucketPresses(b)).toBe(a.totalPresses);
+
+    // heartbeats DO extend uptime (that's the point), which the no-heartbeat run can't show
+    expect(b.uptime.uptimeMs).toBeGreaterThan(0);
   });
 });
