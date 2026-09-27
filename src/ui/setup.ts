@@ -2,11 +2,12 @@
  * Setup screen: one scrolling screen with four steps (SPEC "Admin setup flow"):
  * Load -> Check -> Preview -> Configure -> Go live.
  */
-import type { Deck, Issue, KioskConfig, ButtonDef, Rect } from '../types';
-import { defaultConfig } from '../types';
+import type { Deck, Issue, KioskConfig, ButtonDef, Rect, GlowConfig } from '../types';
+import { defaultConfig, GLOW_INTENSITY_MIN, GLOW_INTENSITY_MAX, GLOW_PERIOD_MIN_MS, GLOW_PERIOD_MAX_MS } from '../types';
 import { parsePptx, validateDeck } from '../pptx';
 import { SlideStage, renderThumbnail, rasterizeDeck, releaseThumbnails } from '../render';
 import { checklist, acquireWakeLock } from '../kiosk';
+import { applyGlowStyle, createGlowLayer } from '../kiosk/glow';
 import { saveDeck, saveConfig, countEvents } from '../store';
 import { uuid } from '../util';
 import { validateConfig } from './config-validate';
@@ -22,6 +23,17 @@ export interface SetupDeps {
   /** "Clear previous data" confirmed: caller wipes storage and restarts on an empty Setup. */
   onClearAll: () => Promise<void>;
 }
+
+/** Ready-made glow colours shown as swatches; any other colour comes from the colour picker. */
+export const GLOW_SWATCHES: { color: string; name: string }[] = [
+  { color: '#ffffff', name: 'White' },
+  { color: '#ffc400', name: 'Gold' },
+  { color: '#ff7a00', name: 'Orange' },
+  { color: '#ff3b6b', name: 'Pink' },
+  { color: '#39e67a', name: 'Green' },
+  { color: '#00d4ff', name: 'Cyan' },
+  { color: '#6b7cff', name: 'Blue' },
+];
 
 const ISSUE_LABELS: Record<Issue['code'], string> = {
   unreadable_file: 'Could not read the file',
@@ -49,6 +61,8 @@ export class SetupScreen {
   /** Destination slides visited in the preview since leaving slide 1, for back links. */
   private previewPath: number[] = [];
   private previewStage: SlideStage | undefined;
+  /** The glow layer in the live preview, restyled in place while a glow slider moves. */
+  private previewGlowLayer: HTMLElement | undefined;
   private goLiveBusy = false;
 
   private readonly root: HTMLElement;
@@ -318,6 +332,11 @@ export class SetupScreen {
     const overlay = this.previewStage.overlay;
     overlay.innerHTML = '';
     overlay.style.pointerEvents = 'none';
+    this.previewGlowLayer = undefined;
+    if (this.config.glow.enabled) {
+      this.previewGlowLayer = createGlowLayer(this.deck, this.previewSlide, this.config.glow);
+      overlay.appendChild(this.previewGlowLayer);
+    }
     if (this.previewSlide === 1) {
       for (const button of this.deck.buttons) {
         const label = this.config.buttonLabels[button.id] ?? button.defaultLabel;
@@ -471,6 +490,8 @@ export class SetupScreen {
         update({ pressFeedback: v as KioskConfig['pressFeedback'] }),
       ),
 
+      this.glowFields(cfg, update),
+
       h('h3', {}, ['Transition']),
       this.selectField(cfg.transition, ['none', 'fade'], (v) => update({ transition: v as KioskConfig['transition'] })),
 
@@ -503,6 +524,95 @@ export class SetupScreen {
             h('ul', {}, errors.map((e) => h('li', {}, [e]))),
           ])
         : null,
+    ]);
+  }
+
+  /**
+   * Button glow: on/off, colour (swatches plus the iPad colour picker), intensity and speed.
+   * The sliders restyle the preview's glow in place and autosave, without a full re-render,
+   * so dragging stays smooth; the checkbox and colour go through the normal `update` path.
+   */
+  private glowFields(cfg: KioskConfig, update: (p: Partial<KioskConfig>) => void): HTMLElement {
+    const glow = cfg.glow;
+    const setGlow = (patch: Partial<GlowConfig>) => update({ glow: { ...this.config.glow, ...patch } });
+    const liveGlow = (patch: Partial<GlowConfig>) => {
+      this.config = { ...this.config, glow: { ...this.config.glow, ...patch } };
+      if (this.previewGlowLayer) applyGlowStyle(this.previewGlowLayer, this.config.glow);
+      this.saveDebounced();
+    };
+
+    const toggle = this.checkboxField('Pulse a glow around buttons that can be pressed', glow.enabled, (v) =>
+      setGlow({ enabled: v }),
+    );
+    if (!glow.enabled) return h('div', { class: 'glow-fields' }, [h('h3', {}, ['Button glow']), toggle]);
+
+    const isPreset = GLOW_SWATCHES.some((sw) => sw.color === glow.color.toLowerCase());
+    const swatches = h('div', { class: 'glow-swatches', role: 'radiogroup', 'aria-label': 'Glow colour' }, [
+      ...GLOW_SWATCHES.map((sw) =>
+        h('button', {
+          type: 'button',
+          class: `glow-swatch${sw.color === glow.color.toLowerCase() ? ' glow-swatch--selected' : ''}`,
+          style: { background: sw.color },
+          title: sw.name,
+          'aria-label': sw.name,
+          role: 'radio',
+          'aria-checked': String(sw.color === glow.color.toLowerCase()),
+          onclick: () => setGlow({ color: sw.color }),
+        }),
+      ),
+      h('label', { class: `glow-custom${isPreset ? '' : ' glow-swatch--selected'}` }, [
+        h('input', {
+          type: 'color',
+          value: glow.color,
+          'aria-label': 'Custom glow colour',
+          onchange: (e: Event) => setGlow({ color: (e.target as HTMLInputElement).value.toLowerCase() }),
+        }),
+        ' Custom',
+      ]),
+    ]);
+
+    const intensityValue = h('span', { class: 'glow-value' }, [String(glow.intensity)]);
+    const intensity = h('input', {
+      type: 'range',
+      min: String(GLOW_INTENSITY_MIN),
+      max: String(GLOW_INTENSITY_MAX),
+      step: '1',
+      value: String(glow.intensity),
+      'aria-label': 'Glow intensity',
+      oninput: (e: Event) => {
+        const v = Number((e.target as HTMLInputElement).value);
+        intensityValue.textContent = String(v);
+        liveGlow({ intensity: v });
+      },
+    });
+
+    // The slider runs slow -> fast left to right, so it stores the mirrored period.
+    const mirror = (ms: number) => GLOW_PERIOD_MIN_MS + GLOW_PERIOD_MAX_MS - ms;
+    const speedText = (ms: number) => `${(ms / 1000).toFixed(1)} s per pulse`;
+    const speedValue = h('span', { class: 'glow-value' }, [speedText(glow.periodMs)]);
+    const speed = h('input', {
+      type: 'range',
+      min: String(GLOW_PERIOD_MIN_MS),
+      max: String(GLOW_PERIOD_MAX_MS),
+      step: '100',
+      value: String(mirror(glow.periodMs)),
+      'aria-label': 'Glow speed',
+      oninput: (e: Event) => {
+        const ms = mirror(Number((e.target as HTMLInputElement).value));
+        speedValue.textContent = speedText(ms);
+        liveGlow({ periodMs: ms });
+      },
+    });
+
+    return h('div', { class: 'glow-fields' }, [
+      h('h3', {}, ['Button glow']),
+      toggle,
+      h('div', { class: 'field-list' }, [
+        h('div', { class: 'field-row' }, [h('span', {}, ['Colour']), swatches]),
+        h('label', { class: 'field-row' }, [h('span', {}, ['Intensity']), h('span', { class: 'muted' }, ['Soft']), intensity, h('span', { class: 'muted' }, ['Strong']), intensityValue]),
+        h('label', { class: 'field-row' }, [h('span', {}, ['Speed']), h('span', { class: 'muted' }, ['Slow']), speed, h('span', { class: 'muted' }, ['Fast']), speedValue]),
+      ]),
+      h('p', { class: 'muted' }, ['The preview above shows the glow on the current slide.']),
     ]);
   }
 

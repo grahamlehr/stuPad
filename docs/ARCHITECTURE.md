@@ -114,6 +114,8 @@ stateDiagram-v2
 
 **Fallback Home button.** If the current destination has no home link or back link and `returnMethods.homeButton` is on, an 88 px "Home" overlay is drawn bottom-centre (never in a corner region), so no slide is a dead end. It is removed and re-evaluated on every slide change.
 
+**Button glow** (`glow.ts`, off by default). When `config.glow.enabled`, each slide gets one `.kiosk-glow-layer` in the stage overlay, built the first time the slide is shown and afterwards only shown or hidden, so a tap never rebuilds it. Each tappable area gets an empty `.kiosk-glow` div whose outer `box-shadow` is the glow and whose `border-radius` follows the linked shape. Only `opacity` is animated (CSS keyframes in `styles.css`), so the pulse runs on the compositor; colour, size and speed are CSS custom properties. A layer fades in with the slide transition, the fallback Home button carries its own glow, and `stop()` drops the cached layers with the stage. The Setup preview draws the same layer, and its sliders restyle it in place.
+
 **Timeout and idle warning.** Each new destination slide, and any tap on it, restarts the timer; with `idleWarning` a 5-second countdown appears in the last 5 s.
 
 **Lockdown.** `touch-action: none`; `touchstart`, `gesturestart`, `dblclick`, `contextmenu` and `selectstart` are `preventDefault`ed. The Screen Wake Lock is acquired on start and re-acquired on `visibilitychange`.

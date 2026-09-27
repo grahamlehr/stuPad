@@ -546,6 +546,56 @@ input[type='number'] {
   animation: pinpad-shake 400ms;
 }
 
+/* Button glow settings (Configure step) */
+.glow-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.glow-swatch {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  padding: 0;
+  cursor: pointer;
+}
+
+.glow-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 10px 0 4px;
+  border: 2px solid transparent;
+  border-radius: 22px;
+}
+
+.glow-custom input[type='color'] {
+  width: 40px;
+  height: 36px;
+  border: none;
+  padding: 0;
+  background: none;
+}
+
+.glow-swatch--selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent);
+}
+
+.glow-fields input[type='range'] {
+  flex: 1 1 200px;
+  min-height: 44px;
+}
+
+.glow-value {
+  min-width: 8ch;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ------------------------------------------------------------------ kiosk */
 
 .kiosk-root {
@@ -562,4 +612,48 @@ input[type='number'] {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
     env(safe-area-inset-left);
   z-index: 1;
+}
+
+/* Pulsing glow around tappable areas (src/kiosk/glow.ts). Only opacity is animated, so the
+   pulse stays on the compositor; the glow itself is a static outer box-shadow, which is
+   never painted over the button's own content. */
+.kiosk-glow-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Fades in with the slide transition; replays each time a cached layer is shown again. */
+  animation: kiosk-glow-in var(--glow-fade-in, 0ms) ease-out both;
+}
+
+@keyframes kiosk-glow-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.kiosk-glow {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+  box-shadow: 0 0 var(--glow-blur) var(--glow-spread) var(--glow-color);
+  will-change: opacity;
+  animation: kiosk-glow-pulse var(--glow-half-period) ease-in-out infinite alternate;
+}
+
+@keyframes kiosk-glow-pulse {
+  from {
+    opacity: 0.15;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kiosk-glow {
+    animation: none;
+  }
 }

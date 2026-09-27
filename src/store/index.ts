@@ -14,6 +14,7 @@
 import { openDB } from 'idb';
 import type { IDBPDatabase } from 'idb';
 import type { Deck, KioskConfig, KioskState, LogEvent, EventFilter } from '../types';
+import { defaultGlow } from '../types';
 import { isoLocal } from '../util';
 
 const DB_NAME = 'stupad';
@@ -122,7 +123,11 @@ export async function saveConfig(cfg: KioskConfig): Promise<void> {
 
 export async function loadConfig(): Promise<KioskConfig | undefined> {
   const db = await openDatabase();
-  return db.get(STORE_CONFIG, SINGLETON_KEY);
+  const cfg = (await db.get(STORE_CONFIG, SINGLETON_KEY)) as KioskConfig | undefined;
+  // A config saved before the glow setting existed won't have it; normalise here so every
+  // other module can rely on it being present.
+  if (cfg && !cfg.glow) cfg.glow = defaultGlow();
+  return cfg;
 }
 
 // ------------------------------------------------------------- kiosk state

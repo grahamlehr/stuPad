@@ -83,6 +83,15 @@ export async function acquireWakeLock(): Promise<boolean>; // one-shot probe (ac
 // also exported for tests and reuse: pointInRect, round1, cornerOf
 ```
 
+`src/kiosk/glow.ts` (button glow, also used by the Setup preview):
+
+```ts
+glowTargets(deck, slide): GlowTarget[]           // tappable areas on a slide, each with a border-radius matching its shape
+glowRadius(elements, id, bounds): string         // '50%' ellipse, 'Npx' roundRect, '0' rect, else a soft radius
+glowStyle(cfg: GlowConfig)                       // shadow colour, blur/spread (slide px) and half-period from the settings
+applyGlowStyle(el, cfg); createGlow(target); createGlowLayer(deck, slide, cfg): HTMLElement
+```
+
 Only `pointerdown` is used for taps, so the 150 ms tap-to-slide budget is not spent waiting for a click. Kiosk rules (SPEC "Kiosk mode behaviour"): secret sequence checked before normal handling (corner taps never trigger buttons); home: button hit → `button_press` + new visit_id + transition; else `miss_tap` with x/y %; destination: home-link hit → `return_home`, else a back-link hit (deck.backLinks) → `slide_nav` to the previous slide of this visit (a per-visit history, cleared on return home), or `return_home` if the visit started on this slide, else a nav-link hit (deck.navLinks for the current slide) → `slide_nav` + move to the target slide (still destination mode: fallback Home button and timeout are re-applied for the new slide) → else tap-anywhere / timeout → `return_home` with method + dwell_ms (the whole visit's dwell, from the first button press, not just the last slide); `slide_nav`'s own dwell_ms is just the time on the slide being left; timeout resets on any tap, including a nav tap; debounce ignores repeat taps (not logged); idle warning countdown in last 5 s; press feedback; disable gestures (touch-action, user-select, contextmenu, gesturestart, dblclick); visibilitychange re-acquires wake lock. If `returnMethods.homeButton` is on and a destination slide has no home link or back link (whether reached directly or via a chain of nav links), show a discreet ≥44pt "Home" overlay button so users are never stranded; the previous slide's fallback button (if any) is removed before drawing a new one.
 
 ### Report API (`src/report/index.ts`)

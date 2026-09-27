@@ -303,6 +303,30 @@ export interface KioskConfig {
   adminPin: string | null;
   /** fallback: show pre-rasterised images instead of DOM rendering */
   useRaster: boolean;
+  /**
+   * Pulsing glow around every tappable area in kiosk mode. Configs saved before this field
+   * existed won't have it; the store normalises a missing value to `defaultGlow()`.
+   */
+  glow: GlowConfig;
+}
+
+export interface GlowConfig {
+  enabled: boolean;
+  /** "#rrggbb" */
+  color: string;
+  /** GLOW_INTENSITY_MIN..GLOW_INTENSITY_MAX: size and brightness of the glow */
+  intensity: number;
+  /** ms for one full pulse (dim -> bright -> dim), GLOW_PERIOD_MIN_MS..GLOW_PERIOD_MAX_MS */
+  periodMs: number;
+}
+
+export const GLOW_INTENSITY_MIN = 1;
+export const GLOW_INTENSITY_MAX = 10;
+export const GLOW_PERIOD_MIN_MS = 500;
+export const GLOW_PERIOD_MAX_MS = 4000;
+
+export function defaultGlow(): GlowConfig {
+  return { enabled: false, color: '#ffffff', intensity: 5, periodMs: 2000 };
 }
 
 export function defaultConfig(fileName: string, now = new Date()): KioskConfig {
@@ -321,6 +345,7 @@ export function defaultConfig(fileName: string, now = new Date()): KioskConfig {
     secretWindowMs: 5000,
     adminPin: null,
     useRaster: false,
+    glow: defaultGlow(),
   };
 }
 

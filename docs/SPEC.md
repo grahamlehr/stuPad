@@ -114,6 +114,7 @@ The preview shows the home slide with each detected button outlined and labelled
 | Return method | Home button or timeout | Home button only / tap anywhere / timeout only / combination |
 | Idle warning before timeout | Off | Show countdown in last 5 s |
 | Button press feedback | Brief highlight | None / highlight / scale |
+| Button glow | Off | A pulsing glow around every tappable area (home-slide buttons, Home, Next/Back links, and the fallback Home button), following each shape's outline (ellipse, rounded or square corners; pictures and groups get softly rounded corners). Colour: seven swatches or any colour from the picker. Intensity 1 to 10. Speed 0.5 to 4 s per pulse. The Setup preview shows it live |
 | Transition | Fade 300 ms | None / fade |
 | Debounce | 800 ms | Ignore repeat taps within this window |
 | Secret exit sequence | Four corners clockwise from top-left, within 5 s | Choice of 2 or 3 patterns |
@@ -222,7 +223,7 @@ id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,metho
 | 4. Return behaviour | Split of returns by Home button, tap and timeout; share of visits ending by timeout per button |
 | 5. Hour-by-day (multi-day only) | Heatmap of presses by hour and day |
 
-Button colours are consistent across every chart. Charts are drawn on-device to canvas and embedded as images in the PDF.
+Button colours are consistent across every chart. Charts are drawn on-device to canvas and embedded as images in the PDF. Every page has a footer: `GGPad · <session name> · page n/N · generated <time>`.
 
 ## Non-functional requirements
 

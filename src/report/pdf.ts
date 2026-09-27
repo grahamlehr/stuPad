@@ -112,7 +112,7 @@ function addFooters(doc: jsPDF, sessionName: string, generatedAt: string): void 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(130, 130, 130);
-    const text = `stuPad · ${sessionName} · page ${i}/${n} · generated ${generatedAt}`;
+    const text = `GGPad · ${sessionName} · page ${i}/${n} · generated ${generatedAt}`;
     doc.text(text, PAGE_W / 2, PAGE_H - 7, { align: 'center' });
   }
 }
@@ -195,7 +195,7 @@ export async function buildPdf(
   deck.buttons.forEach((b, i) => colorOf.set(b.id, buttonColor(i)));
   const colorForId = (id: string): string => colorOf.get(id) ?? buttonColor(stats.buttons.findIndex((b) => b.id === id));
 
-  const sessionName = config.sessionName || 'stuPad session';
+  const sessionName = config.sessionName || 'GGPad session';
   const now = new Date();
   const generatedAt = formatTs(now.toISOString());
 

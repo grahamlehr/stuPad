@@ -11,6 +11,7 @@
 import { SlideStage, preloadDeckFonts } from '../render';
 import type { Deck, ButtonDef, NavLinkDef, KioskConfig, LogEvent, Rect, SecretPattern } from '../types';
 import { uuid } from '../util';
+import { applyGlowStyle, createGlow, createGlowLayer } from './glow';
 
 // ------------------------------------------------------------------ geometry
 
@@ -230,6 +231,9 @@ export class KioskController {
   private fallbackHomeBounds: Rect | null = null;
   private fallbackHomeEl: HTMLElement | null = null;
   private idleCountdownEl: HTMLElement | null = null;
+  /** One glow layer per slide, built the first time the slide is shown and then only
+   * shown/hidden, so slide changes never rebuild it. Empty when the glow is off. */
+  private readonly glowLayers = new Map<number, HTMLElement>();
 
   private wakeLock: WakeLockSentinelLike | null = null;
   private _wakeLockAvailable = false;
@@ -271,6 +275,7 @@ export class KioskController {
     this.stage = new SlideStage(this.root, this.deck, { useRaster: this.config.useRaster });
     await preloadDeckFonts(this.deck.fonts);
     await this.stage.show(1, { type: 'none', ms: 0 });
+    this.showGlow(1, 0);
     this.bindInput();
     await this.reacquireWakeLock();
     document.addEventListener('visibilitychange', this.onVisibilityChange);
@@ -289,6 +294,7 @@ export class KioskController {
       this.wakeLock = null;
       void wl.release().catch(() => {});
     }
+    this.glowLayers.clear(); // their elements go with the stage's overlay
     this.stage?.destroy();
     this.stage = null;
   }
@@ -386,6 +392,7 @@ export class KioskController {
     this.destSlide = button.targetSlide;
     this.visitPath = [button.targetSlide];
     void this.stage?.show(button.targetSlide, { type: this.config.transition, ms: this.config.transitionMs });
+    this.showGlow(button.targetSlide);
     this.setupFallbackHomeButton();
     this.startDestinationTimer();
   }
@@ -470,6 +477,7 @@ export class KioskController {
     this.destSlide = target;
     this.slideEnteredAt = now;
     void this.stage?.show(target, { type: this.config.transition, ms: this.config.transitionMs });
+    this.showGlow(target);
     this.setupFallbackHomeButton();
     this.startDestinationTimer();
   }
@@ -503,6 +511,7 @@ export class KioskController {
     }
     this.clearIdleCountdown();
     void this.stage?.show(1, { type: this.config.transition, ms: this.config.transitionMs });
+    this.showGlow(1);
   }
 
   // ------------------------------------------------------------ timeout
@@ -551,6 +560,23 @@ export class KioskController {
   }
 
   // ------------------------------------------------------------- overlay
+
+  /** Shows the glow layer for `slide` (building it on first use) and hides the others.
+   * Showing a hidden layer replays its fade-in, timed to the slide transition. */
+  private showGlow(slide: number, fadeInMs = this.config.transition === 'fade' ? this.config.transitionMs : 0): void {
+    const overlay = this.stage?.overlay;
+    if (!overlay || !this.config.glow.enabled) return;
+    for (const [s, layer] of this.glowLayers) if (s !== slide) layer.style.display = 'none';
+    let layer = this.glowLayers.get(slide);
+    if (!layer) {
+      layer = createGlowLayer(this.deck, slide, this.config.glow);
+      this.glowLayers.set(slide, layer);
+      // Below press feedback and the fallback Home button, which are appended later.
+      overlay.prepend(layer);
+    }
+    layer.style.setProperty('--glow-fade-in', `${fadeInMs}ms`);
+    layer.style.display = '';
+  }
 
   private showPressFeedback(bounds: Rect): void {
     const overlay = this.stage?.overlay;
@@ -625,6 +651,10 @@ export class KioskController {
     el.style.alignItems = 'center';
     el.style.justifyContent = 'center';
     el.style.fontSize = '20px';
+    if (this.config.glow.enabled) {
+      applyGlowStyle(el, this.config.glow);
+      el.appendChild(createGlow({ bounds: { x: 0, y: 0, w: bounds.w, h: bounds.h }, radius: '50%' }));
+    }
     overlay.appendChild(el);
     this.fallbackHomeEl = el;
   }

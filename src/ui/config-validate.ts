@@ -1,4 +1,5 @@
 import type { KioskConfig } from '../types';
+import { GLOW_INTENSITY_MIN, GLOW_INTENSITY_MAX, GLOW_PERIOD_MIN_MS, GLOW_PERIOD_MAX_MS } from '../types';
 
 /**
  * Validates a KioskConfig against SPEC's "Configurable settings" ranges. Pure and
@@ -30,6 +31,21 @@ export function validateConfig(config: KioskConfig): string[] {
 
   if (config.debounceMs < 0) {
     errors.push('Debounce must not be negative.');
+  }
+
+  const { glow } = config;
+  if (glow.enabled) {
+    if (!/^#[0-9a-f]{6}$/i.test(glow.color)) {
+      errors.push('Button glow colour must be a hex colour like #ffcc00.');
+    }
+    if (!(glow.intensity >= GLOW_INTENSITY_MIN && glow.intensity <= GLOW_INTENSITY_MAX)) {
+      errors.push(`Button glow intensity must be between ${GLOW_INTENSITY_MIN} and ${GLOW_INTENSITY_MAX}.`);
+    }
+    if (!(glow.periodMs >= GLOW_PERIOD_MIN_MS && glow.periodMs <= GLOW_PERIOD_MAX_MS)) {
+      errors.push(
+        `Button glow speed must be between ${GLOW_PERIOD_MIN_MS / 1000} and ${GLOW_PERIOD_MAX_MS / 1000} seconds per pulse.`,
+      );
+    }
   }
 
   return errors;

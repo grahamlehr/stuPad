@@ -67,6 +67,16 @@ describe('store: deck / config / state', () => {
   });
 });
 
+describe('store: config migration', () => {
+  it('fills in the glow setting for a config saved before it existed', async () => {
+    const store = await freshStore();
+    const { glow: _glow, ...oldCfg } = defaultConfig('demo.pptx');
+    await store.saveConfig(oldCfg as KioskConfig);
+    const loaded = await store.loadConfig();
+    expect(loaded?.glow).toEqual({ enabled: false, color: '#ffffff', intensity: 5, periodMs: 2000 });
+  });
+});
+
 describe('store: events CRUD and ordering', () => {
   it('appendEvent assigns increasing ids and getEvents returns them in id order', async () => {
     const store = await freshStore();
