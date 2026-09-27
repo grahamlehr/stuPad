@@ -4,7 +4,7 @@ How the app works end to end, and a tour of the codebase. For *what* the app mus
 
 ## 1. What stuPad does
 
-stuPad is a static, offline-first PWA for iPad Safari. An admin loads a specially structured `.pptx` from the Files app; stuPad parses it in the browser, shows it as a full-screen touch kiosk, logs every tap to IndexedDB, and turns the log into a CSV and a PDF report that the admin shares off the device.
+stuPad (shown to users as **GGPad**) is a static, offline-first PWA for iPad Safari. An admin loads a specially structured `.pptx` from the Files app; stuPad parses it in the browser, shows it as a full-screen touch kiosk, logs every tap to IndexedDB, and turns the log into a CSV and a PDF report that the admin shares off the device.
 
 There are two people and one device:
 
@@ -37,9 +37,9 @@ flowchart TD
 ```
 
 1. **Load.** The admin picks a `.pptx`. `parsePptx` unzips it (JSZip), reads the slide XML, resolves themes, layouts, masters, colours, fonts and backgrounds, and produces a plain-data `Deck` (see `src/types.ts`) plus a list of `Issue`s. It never throws; an unreadable file yields an `unreadable_file` issue.
-2. **Check.** Errors (fewer than two buttons, broken links, too large, no slides) block Go live. Warnings (missing fonts, unsupported elements, unlinked slides, no way home) can be accepted.
+2. **Check.** Errors (unreadable file, fewer than two buttons, broken links, too large, no slides) block Go live. Warnings (missing fonts, unsupported elements, unlinked slides, no way home, non-16:9, small buttons, self links) must be accepted with a checkbox.
 3. **Preview.** The real `SlideStage` renderer shows the home slide with each detected button outlined and labelled; tapping an outline navigates the same way the kiosk will. Thumbnails show every slide. An "image mode" checkbox rasterises each slide to a PNG as a fallback for decks that render badly.
-4. **Configure.** Button labels, timeout, return methods, feedback, transition, debounce, secret pattern, PIN, session name. `validateConfig` blocks Go live on invalid values. The deck and config are debounce-saved to IndexedDB as you edit.
+4. **Configure.** Session name, button labels, timeout, return methods, idle warning, press feedback, button glow, transition, debounce, secret pattern, PIN. `validateConfig` blocks Go live on invalid values. The deck and config are debounce-saved to IndexedDB as you edit. Loading a new file replaces the config with `defaultConfig(fileName)`.
 5. **Go live.** A checklist modal (Guided Access, Auto-Lock, charge, brightness) plus a wake-lock probe. Confirming creates a `sessionId` (UUID), writes `KioskState { running: true }`, logs `kiosk_start`, and mounts the kiosk.
 6. **Run.** The kiosk runs unattended. Every tap goes through `KioskController.handleTap` (section 4).
 7. **Exit.** Tapping the four screen corners in the configured order within the time window opens the admin panel (after a PIN pad if a PIN is set). From there: Resume (same session, no new `kiosk_start`), Export, Clear log, Clear previous data (see below), or Setup (logs `kiosk_stop`, clears the running flag).
@@ -74,7 +74,7 @@ Blob ─ Pkg.load (zip.ts) ─ loadDeck (deck.ts) ─ detectButtons/HomeLinks/Na
 | `color.ts` | Theme colours, `clrMap`, and colour transforms (tint, shade, lumMod, alpha…) → CSS colours. |
 | `background.ts` | Solid, gradient and picture fills for backgrounds. |
 | `geometry.ts` | **The only place EMU is converted** to slide px (`makeScale`, `ptToPx`, `parseXfrm`). |
-| `fonts.ts` | `KNOWN_FONTS` (iPad system fonts, generic families, and a few named web fonts) and `isKnownFont`. |
+| `fonts.ts` | `KNOWN_FONTS` (iPad system fonts, generic families, and the five bundled web fonts) and `isKnownFont`. Fonts embedded in the .pptx (`ppt/fonts/*.fntdata`) are not read, so an embedded font that isn't in this list still gets a `missing_font` warning. |
 | `buttons.ts` | The four detectors, reading-order sort, default labels (`prettyName`: `BTN_Our_People` → "Our People"; PowerPoint default names like "Rectangle 3" are skipped in favour of the shape text, then "Button N"). |
 | `validate.ts` | `validateDeck` (deck-only checks, re-run on a deck loaded from storage) and `validateDeckAndSize` (adds `too_large`). Reachability is a BFS from slide 1 through button targets and nav-link chains. |
 
@@ -157,8 +157,8 @@ Details that matter:
 No framework; `ui/dom.ts` provides `h(tag, props, children)`, `clear`, `debounce`, `fmtBytes`.
 
 - **`main.ts` `App`** is the router and owner of the session. It holds `deck`, `config`, `sessionId`, the `KioskController`, and creates the fixed `.kiosk-root` element. `log()` stamps `ts` (`isoLocal`) and `session_id` and appends to the store. Admin, PIN pad and setup are overlays/screens it mounts and destroys. It also logs `app_resume` when the page becomes visible in kiosk mode.
-- **`ui/setup.ts` `SetupScreen`**: the five-step admin screen described in section 2. Its header puts the Emota lockup (`public/emota-logo-white.png` and `emota-logo-blackberry.png`, swapped by a `<picture>` media query on `prefers-color-scheme`) right-aligned beside the title; negative margins in `.setup-logo` cancel the files' transparent padding.
-- **`ui/admin.ts` `AdminPanel`**: session stat tiles, export scope (session / date range / all) with a live event count, CSV and PDF export, Clear log behind typing `CLEAR`, and Clear previous data.
+- **`ui/setup.ts` `SetupScreen`**: the five-step admin screen described in section 2. Its header shows "GGPad setup" with the app version (`import.meta.env.VITE_APP_VERSION`, injected from `package.json` by `vite.config.ts`) as a subheading, and puts the Emota lockup (`public/emota-logo-white.png` and `emota-logo-blackberry.png`, swapped by a `<picture>` media query on `prefers-color-scheme`) right-aligned beside the title; negative margins in `.setup-logo` cancel the files' transparent padding.
+- **`ui/admin.ts` `AdminPanel`**: session stat tiles (presses, visits, average dwell, miss taps), export scope (session / date range / all) with a live event count, CSV and PDF export, Clear log behind typing `CLEAR`, Clear previous data, and a footer with the total stored events and `navigator.storage.estimate()` usage. The PDF's home thumbnail is the stored raster in image mode, else `rasterizeSlide(deck, 1)`, else none.
 - **`ui/clear-data.ts`**: the "Clear previous data" confirmation dialog shared by Setup (Load step) and the admin panel. On confirm, `App.clearAll()` in `main.ts` stops the kiosk and tears down the mounted screen (cancelling Setup's pending autosave so the old deck isn't saved again), calls `clearAllData`, then reloads the page so no in-memory deck, fonts or object URLs survive.
 - **`ui/pinpad.ts` + `pinpad-logic.ts`**: numeric PIN overlay; three wrong attempts or 30 s idle returns to the kiosk. Wrong attempts log `admin_unlock_fail`.
 - **Pure helpers, unit-tested without a DOM:** `lifecycle.ts` (`decideStartupScreen`), `config-validate.ts`, `export-scope.ts`.
@@ -167,10 +167,13 @@ No framework; `ui/dom.ts` provides `h(tag, props, children)`, `clear`, `debounce
 ## 9. Offline, PWA and deployment
 
 - `vite-plugin-pwa` (`registerType: 'autoUpdate'`) generates a Workbox service worker that precaches JS, CSS, HTML, SVG, PNG, WOFF2 and `template.pptx`. `main.ts` registers it with `registerSW({ immediate: true })`.
-- The manifest is fullscreen, landscape. `index.html` adds the Apple meta tags for Home Screen standalone mode.
+- The manifest ("GGPad Kiosk", short name "GGPad") is fullscreen, landscape, with the blackberry `#180a30` theme colour. `index.html` adds the Apple meta tags for Home Screen standalone mode.
 - **Base path.** `vite.config.ts` reads `BASE_PATH` (the Pages workflow sets `/stuPad/`). Code must use `import.meta.env.BASE_URL` and `index.html` `%BASE_URL%`; never hard-code `/`.
-- `.github/workflows/deploy-pages.yml`: on push to `main`, `npm ci`, `npm test`, `npm run build`, deploy `dist/` to GitHub Pages.
-- Icons, the test fixtures and the fonts are generated by `scripts/make-icons.mjs`, `scripts/make-fixtures.mjs` and `scripts/make-fonts.mjs`. The shipped `public/template.pptx` is maintained by hand in PowerPoint (template guide, T&Cs slide, Emota branding); no script generates it.
+- **Version.** `package.json` `version` is the only source. `vite.config.ts` defines `import.meta.env.VITE_APP_VERSION` from it, shown in the Setup header and in the page title (`GGPad v%VITE_APP_VERSION%` in `index.html`). Every merge to `main` is a release and bumps it (see CLAUDE.md for the semver rule).
+- `.github/workflows/ci.yml`: on every pull request to `main`, `npm ci`, `npm test`, `npm run build`. Its `test` job is a required check in the `main` branch ruleset, which also blocks direct pushes, force pushes and deletion.
+- `.github/workflows/deploy-pages.yml`: on push to `main` (or a manual run), `npm ci`, `npm test`, `npm run build` with `BASE_PATH` from `actions/configure-pages`, deploy `dist/` to GitHub Pages.
+- `.claude/launch.json` defines a `preview` configuration (`vite preview` on port 4180 with `BASE_PATH=/stuPad/`) for checking a production build locally.
+- Icons, the test fixtures and the fonts are generated by `scripts/make-icons.mjs` (run with `node`; there is no npm script), `scripts/make-fixtures.mjs` (`npm run fixtures`) and `scripts/make-fonts.mjs` (`npm run fonts`). The shipped `public/template.pptx` is maintained by hand in PowerPoint (template guide, T&Cs slide, Emota branding); no script generates it.
 
 ## 10. Tests
 
@@ -180,10 +183,10 @@ No framework; `ui/dom.ts` provides `h(tag, props, children)`, `clear`, `debounce
 | --- | --- |
 | `tests/pptx` | Parsing fixtures, colour resolution, unit conversion, validation |
 | `tests/render` | Shapes, text, `SlideStage` (fit, `toSlide`, fades, URL revocation), bundled fonts (manifest matches files and licences, raster embedding) |
-| `tests/kiosk` | Secret-sequence detector; controller flows (press, nav, back, timeout, debounce, cleanup) |
-| `tests/store` | Durability, ordering, filters, clear, 100k-event scale, reopen |
-| `tests/report` | Stats, CSV, PDF, charts (mock canvas context), export |
-| `tests/ui` | Setup screen, config validation, PIN logic, export scope, lifecycle |
+| `tests/kiosk` | Secret-sequence detector; controller flows (press, nav, back, timeout, debounce, cleanup); glow targets, radii, styling and layers |
+| `tests/store` | Durability, ordering, filters, clear, clear all, 100k-event scale, reopen |
+| `tests/report` | Stats, CSV, PDF, charts (mock canvas context), colours, export |
+| `tests/ui` | Setup screen (stored-deck re-validation, preview teardown, clear data, glow settings), Clear previous data dialog, config validation, PIN logic, export scope, lifecycle |
 
 Fixtures in `tests/fixtures/` are generated by `npm run fixtures`; don't hand-edit them. Real iPad behaviour (share sheet, wake lock, Guided Access, standalone mode, storage persistence) can't be tested in jsdom; check it on a device after changing kiosk, export or service-worker code.
 
@@ -200,3 +203,7 @@ Fixtures in `tests/fixtures/` are generated by `npm run fixtures`; don't hand-ed
 - Embedding fonts in the raster fallback has been unit-tested but not checked on real iPad Safari, which can be fussy about fonts in SVG images. If image mode shows the wrong font on a device, that is the place to look.
 - Vertical text, and auto-number schemes beyond a handful of common ones, render approximately. See the "Limitations" comment at the end of `src/render/index.ts`.
 - Animations, transitions, video and audio in the deck are ignored; the app uses its own fade.
+- Fonts embedded in the .pptx are ignored (see `src/pptx/fonts.ts`).
+- The transition length (300 ms) and the secret-sequence window (5 s) are `KioskConfig` fields but have no control in Setup. The Setup hint under "Secret exit sequence" always says "Tap the four corners", which doesn't describe the `tl3_br2` pattern.
+- The 12-hour, no-memory-growth target is checked by hand on a device; there is no automated soak test.
+- `listSessions()` and `deleteDeck()` in the store are exported and tested but not used by the UI.

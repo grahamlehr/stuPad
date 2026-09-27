@@ -9,7 +9,7 @@ This is the build plan the app was created from: stack, module ownership and pub
 - Vite + TypeScript (strict), **no UI framework** — plain DOM. Keep the bundle small and the runtime predictable for 12-hour runs.
 - `jszip` (PPTX), `idb` (IndexedDB), `jspdf` (PDF), charts drawn by hand on `<canvas>` (no chart library).
 - `vite-plugin-pwa` (Workbox) precaches everything for offline use (`registerType: 'autoUpdate'`).
-- Tests: `vitest` + `jsdom` + `fake-indexeddb`. `pptxgenjs` (dev only) generates the template deck and test fixtures.
+- Tests: `vitest` + `jsdom` + `fake-indexeddb`. `pptxgenjs` (dev only) generates the test fixtures. (It originally generated `public/template.pptx` too; the template is now edited by hand in PowerPoint.)
 
 ## Module layout and ownership
 
@@ -19,7 +19,7 @@ This is the build plan the app was created from: stack, module ownership and pub
 | `src/render/` | Agent B (1) | Deck model → DOM at SLIDE_W x height, stage that letterboxes to screen, thumbnails, raster fallback | see below |
 | `src/store/`, `src/kiosk/` | Agent C (1) | IndexedDB persistence + append-only log; kiosk runtime state machine | see below |
 | `src/report/` | Agent D (1) | Stats, CSV, PDF (charts on canvas), share-sheet export | see below |
-| `src/ui/`, `src/main.ts`, `src/styles.css`, `public/` | Agent E (2) | Setup screen, admin panel, PIN pad, checklist, routing, PWA icons, resume-on-launch | — |
+| `src/ui/`, `src/main.ts`, `src/styles.css`, `public/` | Agent E (2) | Setup screen, admin panel, PIN pad, checklist, Clear previous data dialog, routing, PWA icons, resume-on-launch | — |
 
 Phase 1 agents run in parallel on disjoint directories. Phase 2 integrates. Phase 3: review + fix.
 
@@ -93,7 +93,7 @@ glowStyle(cfg: GlowConfig)                       // shadow colour, blur/spread (
 applyGlowStyle(el, cfg); createGlow(target); createGlowLayer(deck, slide, cfg): HTMLElement
 ```
 
-Only `pointerdown` is used for taps, so the 150 ms tap-to-slide budget is not spent waiting for a click. Kiosk rules (SPEC "Kiosk mode behaviour"): secret sequence checked before normal handling (corner taps never trigger buttons); home: button hit → `button_press` + new visit_id + transition; else `miss_tap` with x/y %; destination: home-link hit → `return_home`, else a back-link hit (deck.backLinks) → `slide_nav` to the previous slide of this visit (a per-visit history, cleared on return home), or `return_home` if the visit started on this slide, else a nav-link hit (deck.navLinks for the current slide) → `slide_nav` + move to the target slide (still destination mode: fallback Home button and timeout are re-applied for the new slide) → else tap-anywhere / timeout → `return_home` with method + dwell_ms (the whole visit's dwell, from the first button press, not just the last slide); `slide_nav`'s own dwell_ms is just the time on the slide being left; timeout resets on any tap, including a nav tap; debounce ignores repeat taps (not logged); idle warning countdown in last 5 s; press feedback; disable gestures (touch-action, user-select, contextmenu, gesturestart, dblclick); visibilitychange re-acquires wake lock. If `returnMethods.homeButton` is on and a destination slide has no home link or back link (whether reached directly or via a chain of nav links), show a discreet ≥44pt "Home" overlay button so users are never stranded; the previous slide's fallback button (if any) is removed before drawing a new one.
+Only `pointerdown` is used for taps, so the 150 ms tap-to-slide budget is not spent waiting for a click. Kiosk rules (SPEC "Kiosk mode behaviour"): secret sequence checked before normal handling (taps that continue or complete a sequence are consumed and never trigger buttons; a sequence's first corner tap is handled normally); home: button hit → `button_press` + new visit_id + transition; else `miss_tap` with x/y %; destination: home-link hit → `return_home`, else a back-link hit (deck.backLinks) → `slide_nav` to the previous slide of this visit (a per-visit history, cleared on return home), or `return_home` if the visit started on this slide, else a nav-link hit (deck.navLinks for the current slide) → `slide_nav` + move to the target slide (still destination mode: fallback Home button and timeout are re-applied for the new slide) → else tap-anywhere / timeout → `return_home` with method + dwell_ms (the whole visit's dwell, from the first button press, not just the last slide); `slide_nav`'s own dwell_ms is just the time on the slide being left; timeout resets on any tap, including a nav tap; debounce ignores repeat taps (not logged); idle warning countdown in last 5 s; press feedback; disable gestures (touch-action, user-select, contextmenu, gesturestart, dblclick); visibilitychange re-acquires wake lock. If `returnMethods.homeButton` is on and a destination slide has no home link or back link (whether reached directly or via a chain of nav links), show a discreet ≥44pt "Home" overlay button so users are never stranded; the previous slide's fallback button (if any) is removed before drawing a new one.
 
 ### Report API (`src/report/index.ts`)
 
@@ -104,7 +104,7 @@ buildPdf(events, deck, config, homeThumbPng?: Blob): Promise<Blob>   // A4 lands
 pdfFileName(sessionName, now): string                                // same <session>_<yyyy-mm-dd-hhmm> pattern as csvFileName
 exportFile(file: File): Promise<'shared'|'downloaded'|'cancelled'>   // navigator.share({files}) → fallback <a download>
 buttonColor(i: number): string    // consistent palette across all charts
-returnMethodColor(m: ReturnMethod): string
+returnMethodColor(m: ReturnMethod): string        // in src/report/colors.ts; not re-exported from index.ts
 draw*Chart(ctx, width, height, data, fontScale?)  // donut, dwell bar, activity, bar, percent bar, heatmap: hand-drawn canvas charts (src/report/charts.ts)
 ```
 
@@ -119,4 +119,6 @@ draw*Chart(ctx, width, height, data, fontScale?)  // donut, dwell bar, activity,
 
 1. **Parallel modules** (A parser+template, B renderer, C store+kiosk, D reports).
 2. **Integration** (E): UI, main.ts, PWA, end-to-end check in a browser with the template deck.
-3. **Review**: code review pass, fix, push. Later work (nav links, "Last Slide Viewed" back links, slide-view stats) extended the parser, kiosk and report modules additively. Deployment is GitHub Pages via `.github/workflows/deploy-pages.yml` (served under `/stuPad/`; use `import.meta.env.BASE_URL` for asset URLs).
+3. **Review**: code review pass, fix, push. Deployment is GitHub Pages via `.github/workflows/deploy-pages.yml` (served under `/stuPad/`; use `import.meta.env.BASE_URL` for asset URLs).
+
+Later work, all additive, landed through pull requests once `main` was protected: nav links, "Last Slide Viewed" back links and slide-view stats (parser, kiosk, report); bundled web fonts (`src/render/fonts.ts`, `npm run fonts`); button glow (`src/kiosk/glow.ts`, `KioskConfig.glow`); Clear previous data (`clearAllData`, `src/ui/clear-data.ts`); the Emota rebrand of the admin UI and template deck, with the user-facing name GGPad; the version in the Setup header and page title; and the PR check in `.github/workflows/ci.yml`.
