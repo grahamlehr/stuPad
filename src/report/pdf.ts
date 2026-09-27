@@ -10,9 +10,11 @@ import {
   drawBarChart,
   drawPercentBarChart,
   drawHeatmapChart,
+  drawTapHeatmap,
   type NamedValue,
   type ActivityChartData,
   type HeatmapChartData,
+  type TapHeatmapData,
 } from './charts';
 
 const PAGE_W = 297; // A4 landscape, mm
@@ -175,6 +177,22 @@ async function drawHomeThumbnail(doc: jsPDF, png: Blob | undefined, x: number, y
 }
 
 /**
+ * Decodes the home thumbnail PNG so the synchronous `drawTapHeatmap` can paint it. Returns
+ * `undefined` (never throws) when `createImageBitmap` isn't available (as in jsdom's test
+ * environment, and on very old browsers) or when decoding fails, e.g. Safari canvas
+ * tainting in `rasterizeSlide`. The tap-heatmap page never depends on this succeeding: the
+ * grid cells and button outlines alone still make it readable.
+ */
+async function decodeThumbnail(png: Blob): Promise<ImageBitmap | undefined> {
+  if (typeof createImageBitmap !== 'function') return undefined;
+  try {
+    return await createImageBitmap(png);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Build the full PDF report. Only `deck.buttons` is used (for button order,
  * default labels and colour assignment); rendering/thumbnail generation is
  * the caller's job — pass an already-rendered PNG via `homeThumbPng`.
@@ -290,7 +308,45 @@ export async function buildPdf(
     doc.setTextColor(120, 120, 120);
     doc.text('Average dwell per button', dwellX, MARGIN + 12 + Math.min(donutH, dwellW * (440 / 640)) + 8);
 
-    // ---------------------------------------------------------------- page 3: Activity over time
+    // ---------------------------------------------------------------- page 3: Home slide taps (only when there are miss taps)
+    if (stats.missTaps > 0) {
+      doc.addPage();
+      drawPageTitle(doc, 'Home slide taps');
+
+      const allHomeSlideTaps = stats.totalPresses + stats.missTaps;
+      const missShare = allHomeSlideTaps > 0 ? (stats.missTaps / allHomeSlideTaps) * 100 : 0;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(120, 120, 120);
+      doc.text(
+        `${stats.missTaps} miss taps, ${missShare.toFixed(1)}% of ${allHomeSlideTaps} home-slide taps`,
+        MARGIN,
+        MARGIN + 12,
+      );
+
+      let thumbnail: ImageBitmap | undefined;
+      try {
+        thumbnail = homeThumbPng ? await decodeThumbnail(homeThumbPng) : undefined;
+        const heatmapData: TapHeatmapData = {
+          grid: stats.missGrid,
+          buttons: deck.buttons.map((b) => ({
+            label: labels[b.id] ?? b.defaultLabel,
+            x: b.bounds.x,
+            y: b.bounds.y,
+            w: b.bounds.w,
+            h: b.bounds.h,
+          })),
+          deckHeight: deck.height,
+          thumbnail,
+        };
+        const heatUrl = renderChartImage(drawTapHeatmap, heatmapData, 1600, 700, fontScaleFor(1600, CONTENT_W, 11));
+        placeImage(doc, heatUrl, 1600, 700, MARGIN, MARGIN + 18, CONTENT_W);
+      } finally {
+        thumbnail?.close();
+      }
+    }
+
+    // ---------------------------------------------------------------- page: Activity over time (4th when Home slide taps is shown)
     doc.addPage();
     drawPageTitle(doc, 'Activity over time');
     doc.setFont('helvetica', 'normal');
@@ -309,7 +365,7 @@ export async function buildPdf(
     placeImage(doc, activityUrl, 1600, 700, MARGIN, MARGIN + 18, CONTENT_W);
     drawLegend(doc, stats.buttons.map((b) => ({ label: b.label, color: colorForId(b.id) })), MARGIN, PAGE_H - MARGIN - 6);
 
-    // ---------------------------------------------------------------- page 4: Return behaviour
+    // ---------------------------------------------------------------- page: Return behaviour (5th when Home slide taps is shown)
     doc.addPage();
     drawPageTitle(doc, 'Return behaviour');
 
@@ -337,7 +393,7 @@ export async function buildPdf(
     const timeoutUrl = renderChartImage(drawPercentBarChart, timeoutData, 640, 440, fontScaleFor(640, timeoutW, 13));
     placeImage(doc, timeoutUrl, 640, 440, timeoutX, MARGIN + 14, timeoutW);
 
-    // ---------------------------------------------------------------- page 5: Hour-by-day (multi-day only)
+    // ---------------------------------------------------------------- page: Hour-by-day (multi-day only; last page)
     if (stats.isMultiDay) {
       doc.addPage();
       drawPageTitle(doc, 'Hour by day');

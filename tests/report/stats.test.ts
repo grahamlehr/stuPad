@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeStats } from '../../src/report/stats';
+import { computeStats, MISS_GRID_COLS, MISS_GRID_ROWS } from '../../src/report/stats';
 import type { LogEvent } from '../../src/types';
 
 const SID = 'sess-1';
@@ -149,6 +149,65 @@ describe('computeStats: presses and visits', () => {
     expect(stats.returnsByMethod.timeout).toBe(1);
     expect(stats.avgDwellMs).toBe(9000); // still counted at session level
     expect(stats.buttons).toEqual([]); // but not attributed to any button
+  });
+});
+
+describe('computeStats: miss-tap grid', () => {
+  function countGridCells(grid: number[][]): number {
+    return grid.reduce((sum, row) => sum + row.reduce((s, v) => s + v, 0), 0);
+  }
+
+  it('is an all-zero MISS_GRID_ROWS x MISS_GRID_COLS grid for an empty log', () => {
+    const stats = computeStats([], {});
+    expect(stats.missGrid).toHaveLength(MISS_GRID_ROWS);
+    for (const row of stats.missGrid) {
+      expect(row).toHaveLength(MISS_GRID_COLS);
+      expect(row.every((v) => v === 0)).toBe(true);
+    }
+  });
+
+  it('is an all-zero grid when there are events but no miss taps', () => {
+    const events: LogEvent[] = [press('b1', '2026-10-14T10:00:00.000+00:00'), ret('2026-10-14T10:00:10.000+00:00')];
+    const stats = computeStats(events, { b1: 'A' });
+    expect(countGridCells(stats.missGrid)).toBe(0);
+  });
+
+  it('bins x = 0, y = 0 into the first cell', () => {
+    const stats = computeStats([miss('2026-10-14T10:00:00.000+00:00', 0, 0)], {});
+    expect(stats.missGrid[0][0]).toBe(1);
+    expect(countGridCells(stats.missGrid)).toBe(1);
+  });
+
+  it('bins x = 100, y = 100 into the last cell (not off the edge)', () => {
+    const stats = computeStats([miss('2026-10-14T10:00:00.000+00:00', 100, 100)], {});
+    expect(stats.missGrid[MISS_GRID_ROWS - 1][MISS_GRID_COLS - 1]).toBe(1);
+    expect(countGridCells(stats.missGrid)).toBe(1);
+  });
+
+  it('bins a mid-slide tap into the matching cell', () => {
+    // x = 50% of 48 cols = col 24; y = 50% of 27 rows = row 13 (floor(13.5))
+    const stats = computeStats([miss('2026-10-14T10:00:00.000+00:00', 50, 50)], {});
+    expect(stats.missGrid[13][24]).toBe(1);
+  });
+
+  it('accumulates multiple miss taps landing in the same cell', () => {
+    const events: LogEvent[] = [
+      miss('2026-10-14T10:00:00.000+00:00', 1, 1),
+      miss('2026-10-14T10:00:01.000+00:00', 1.5, 1.5),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.missGrid[0][0]).toBe(2);
+  });
+
+  it('ignores miss taps with missing or non-finite coordinates', () => {
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T10:00:00.000+00:00', session_id: SID, event: 'miss_tap' }, // no x/y
+      { ts: '2026-10-14T10:00:01.000+00:00', session_id: SID, event: 'miss_tap', x: NaN, y: 10 },
+      { ts: '2026-10-14T10:00:02.000+00:00', session_id: SID, event: 'miss_tap', x: 10, y: Infinity },
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.missTaps).toBe(3); // still counted toward the overall miss-tap total
+    expect(countGridCells(stats.missGrid)).toBe(0); // but none land in the grid
   });
 });
 

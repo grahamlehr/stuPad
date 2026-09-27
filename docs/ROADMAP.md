@@ -38,7 +38,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 - Tests: `tests/ui/config-validate.test.ts` ranges; `tests/ui/setup.test.ts` that the hint text follows the pattern.
 - Docs: SPEC settings table (remove "fixed"), ARCHITECTURE known gaps (remove the entry).
 
-## B. Miss-tap heatmap (item 1)
+## B. Miss-tap heatmap (item 1) (done in 1.3.0)
 
 **Goal.** Show where visitors tap on the home slide when they miss a button, to reveal buttons people expect but that don't exist, or hit areas that are too small.
 

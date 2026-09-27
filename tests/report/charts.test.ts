@@ -6,6 +6,7 @@ import {
   drawBarChart,
   drawPercentBarChart,
   drawHeatmapChart,
+  drawTapHeatmap,
 } from '../../src/report/charts';
 import { makeMockCtx } from './mockCtx';
 
@@ -27,6 +28,9 @@ describe('chart functions guard a null context', () => {
   });
   it('drawHeatmapChart does not throw with a null ctx', () => {
     expect(() => drawHeatmapChart(null, 100, 100, { days: [], matrix: [] })).not.toThrow();
+  });
+  it('drawTapHeatmap does not throw with a null ctx', () => {
+    expect(() => drawTapHeatmap(null, 100, 100, { grid: [], buttons: [], deckHeight: 1080 })).not.toThrow();
   });
 });
 
@@ -105,5 +109,56 @@ describe('drawHeatmapChart', () => {
     drawHeatmapChart(ctx, 600, 200, { days: ['2026-10-14', '2026-10-15'], matrix });
     // 48 cells + 1 background fill
     expect(callCount('fillRect')).toBe(49);
+  });
+});
+
+describe('drawTapHeatmap', () => {
+  const buttons = [
+    { label: 'Sustainability', x: 100, y: 100, w: 300, h: 200 },
+    { label: 'Community', x: 500, y: 100, w: 300, h: 200 },
+  ];
+
+  it('renders a "No data" placeholder when there is no grid and no buttons', () => {
+    const { ctx, calls } = makeMockCtx();
+    drawTapHeatmap(ctx, 400, 300, { grid: [], buttons: [], deckHeight: 1080 });
+    const text = calls.find((c) => c.method === 'fillText');
+    expect(text?.args[0]).toBe('No data');
+  });
+
+  it('draws one filled cell per nonzero grid entry, plus a stroked outline and label per button', () => {
+    const { ctx, callCount, calls } = makeMockCtx();
+    const grid = [
+      [0, 0, 3],
+      [0, 5, 0],
+    ];
+    drawTapHeatmap(ctx, 800, 450, { grid, buttons, deckHeight: 1080 });
+    // 2 nonzero cells + 1 background fill (no thumbnail, so no wash fill)
+    expect(callCount('fillRect')).toBe(3);
+    // one outline per button, plus the plot-area border drawn in place of a missing thumbnail
+    expect(callCount('strokeRect')).toBe(buttons.length + 1);
+    // one label per button
+    const labelCalls = calls.filter((c) => c.method === 'fillText');
+    expect(labelCalls).toHaveLength(buttons.length);
+  });
+
+  it('draws the thumbnail underneath the grid, then a light wash, when one is provided', () => {
+    const { ctx, callCount } = makeMockCtx();
+    const fakeBitmap = {} as unknown as CanvasImageSource;
+    const grid = [[1]];
+    drawTapHeatmap(ctx, 800, 450, { grid, buttons: [], deckHeight: 1080, thumbnail: fakeBitmap });
+    expect(callCount('drawImage')).toBe(1);
+    // background fill + wash fill + 1 grid cell
+    expect(callCount('fillRect')).toBe(3);
+  });
+
+  it('does not throw when the thumbnail fails to draw', () => {
+    const { ctx } = makeMockCtx();
+    (ctx.drawImage as unknown as { mockImplementation: (fn: () => void) => void }).mockImplementation(() => {
+      throw new Error('tainted canvas');
+    });
+    const fakeBitmap = {} as unknown as CanvasImageSource;
+    expect(() =>
+      drawTapHeatmap(ctx, 800, 450, { grid: [[1]], buttons, deckHeight: 1080, thumbnail: fakeBitmap }),
+    ).not.toThrow();
   });
 });
