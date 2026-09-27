@@ -11,6 +11,7 @@ import {
   clearAllData,
 } from './store';
 import { KioskController } from './kiosk';
+import { ensureFontFaces } from './render';
 import { SetupScreen } from './ui/setup';
 import { AdminPanel } from './ui/admin';
 import { PinPad } from './ui/pinpad';
@@ -225,4 +226,6 @@ class App {
   }
 }
 
+// The admin UI is set in the bundled Montserrat, so register the font files before first paint.
+ensureFontFaces();
 void new App().init();

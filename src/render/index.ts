@@ -26,9 +26,9 @@ import type {
   Xfrm,
 } from '../types';
 import { SLIDE_W } from '../types';
-import { fontFaceCss, embeddedFontCss } from './fonts';
+import { ensureFontFaces, embeddedFontCss } from './fonts';
 
-export { preloadDeckFonts, BUNDLED_FONT_FAMILIES } from './fonts';
+export { preloadDeckFonts, ensureFontFaces, BUNDLED_FONT_FAMILIES } from './fonts';
 
 // ------------------------------------------------------------------ styling
 
@@ -72,10 +72,11 @@ const STYLE_TEXT = `
 
 function ensureStyles(): void {
   if (typeof document === 'undefined') return;
+  ensureFontFaces();
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement('style');
   style.id = STYLE_ID;
-  style.textContent = `${STYLE_TEXT}\n${fontFaceCss()}`;
+  style.textContent = STYLE_TEXT;
   document.head.appendChild(style);
 }
 

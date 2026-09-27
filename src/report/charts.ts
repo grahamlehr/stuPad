@@ -405,8 +405,8 @@ export function drawHeatmapChart(
   for (const row of matrix) for (const v of row) max = Math.max(max, v);
   max = Math.max(1, max);
 
-  // base colour ramp from light to the brand accent (cobalt blue, #0047AB)
-  const rampTo = { r: 0, g: 71, b: 171 };
+  // base colour ramp from white to Emota blackberry (#2A034C), the brand's logo colour
+  const rampTo = { r: 42, g: 3, b: 76 };
 
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';

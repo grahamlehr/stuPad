@@ -19,8 +19,8 @@ export default defineConfig({
         short_name: 'GGPad',
         display: 'fullscreen',
         orientation: 'landscape',
-        background_color: '#000080',
-        theme_color: '#000080',
+        background_color: '#180a30',
+        theme_color: '#180a30',
         start_url: base,
         scope: base,
         icons: [

@@ -90,6 +90,8 @@ The app should ship with a downloadable template .pptx that follows all these ru
 
 Setup is one scrolling screen with five steps: load, check, preview, configure, go live.
 
+The admin screens (Setup, admin panel, PIN pad, dialogs) use the Emota brand from `docs/brand/` (`emota-brand.css` and its cheat sheet): Montserrat, blackberry and night surfaces, and teal as the single accent. They are dark by default and switch to the brand's light variant when the iPad is set to light appearance. Slides are never restyled.
+
 ```mermaid
 flowchart LR
     A[Load .pptx<br/>from Files] --> B[Check<br/>errors and warnings]

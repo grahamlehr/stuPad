@@ -25,6 +25,22 @@ export function fontFaceCss(): string {
   return FONT_FACES.map((f) => rule(f, fontUrl(f))).join('\n');
 }
 
+const FONT_STYLE_ID = 'stupad-fonts';
+
+/**
+ * Injects the bundled @font-face rules into the document once. The renderer calls it before
+ * drawing slides, and main.ts calls it at startup because the admin UI is set in Montserrat.
+ * A rule only fetches its file when text first uses it.
+ */
+export function ensureFontFaces(): void {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById(FONT_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = FONT_STYLE_ID;
+  style.textContent = fontFaceCss();
+  document.head.appendChild(style);
+}
+
 const dataUrlCache = new Map<string, Promise<string | null>>();
 
 function fetchAsDataUrl(entry: FontFaceEntry): Promise<string | null> {

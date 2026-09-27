@@ -1,0 +1,174 @@
+/*
+ * Emota brand CSS
+ * Extracted from VerbCloud by Emota (Admin console and the "Emota Core" display preset), 2026-09-27.
+ *
+ * Usage: link this file, add class="em-body" to <body>, and use the em- classes and --em- tokens.
+ * Dark is the brand default. Add data-em-theme="light" to any element for the light variant.
+ * The light variant is derived from the brand colours; VerbCloud itself only ships dark.
+ */
+@import url("https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap");
+
+:root {
+  /* Core palette */
+  --em-blackberry: #2a034c;   /* Logo colour. Primary brand surface. */
+  --em-night: #180a30;        /* Page background. */
+  --em-night-deep: #120322;   /* Dialog tint, deepest shade. */
+  --em-sidebar: #20053c;      /* Navigation rail. */
+  --em-plum: #3a1164;         /* Raised controls: inputs, buttons, chips. */
+  --em-grape: #451284;        /* Secondary colour on displays. */
+  --em-violet: #7949f0;       /* Highlight glow. */
+  --em-teal: #00ca9f;         /* Accent. */
+  --em-mint: #7ef5bd;         /* Glows and dashed outlines. */
+  --em-teal-deep: #073d3d;    /* Accent tint background. */
+  --em-teal-ink: #042b29;     /* Text on teal. */
+  --em-lavender: #e2e2f2;     /* Foreground on large displays. */
+  --em-white: #fbfaff;        /* Primary text on dark. */
+  --em-mist: #c5c5d6;         /* Muted text on dark. */
+  --em-slate: #414156;        /* Cards on large displays. */
+  --em-amber: #fab600;        /* Warning. */
+  --em-pink: #ff91ca;         /* Error. */
+  --em-ink: #080a0e;          /* Code and log wells. */
+
+  /* Type */
+  --em-font: Montserrat, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --em-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --em-track-tight: -.045em;  /* Headings. */
+  --em-track-tighter: -.05em; /* Big numbers. */
+  --em-track-caps: .18em;     /* Uppercase eyebrows. */
+
+  /* Shape */
+  --em-radius-control: 5px;
+  --em-radius-panel: 8px;
+  --em-radius-dialog: 10px;
+  --em-radius-nested: 14px;
+  --em-radius-card: 18px;
+  --em-radius-display: 20px;
+  --em-radius-pill: 999px;
+
+  /* Light and depth */
+  --em-glow: 0 0 14px rgba(126, 245, 189, .7);
+  --em-backdrop: rgba(5, 0, 12, .78);
+}
+
+/* Dark theme (brand default). data-em-theme="dark" forces it inside a light page. */
+:root, [data-em-theme="dark"] {
+  /* Semantic roles: build components from these, not from the palette */
+  --em-bg: var(--em-night);
+  --em-surface: var(--em-blackberry);
+  --em-surface-2: var(--em-plum);
+  --em-rail: var(--em-sidebar);
+  --em-text: var(--em-white);
+  --em-muted: var(--em-mist);
+  --em-line: rgba(226, 226, 242, .19);
+  --em-accent: var(--em-teal);
+  --em-accent-text: var(--em-teal);
+  --em-accent-soft: var(--em-teal-deep);
+  --em-on-accent: var(--em-teal-ink);
+  --em-warn: var(--em-amber);
+  --em-warn-soft: rgba(240, 195, 110, .12);
+  --em-error: var(--em-pink);
+  --em-error-soft: rgba(255, 145, 202, .12);
+  --em-well: var(--em-ink);
+  --em-shadow-dialog: 0 30px 90px rgba(2, 0, 8, .48);
+  color-scheme: dark;
+}
+
+[data-em-theme="light"] {
+  --em-bg: #f6f4fb;
+  --em-surface: #ffffff;
+  --em-surface-2: #efebf7;
+  --em-rail: #ece7f6;
+  --em-text: var(--em-blackberry);
+  --em-muted: #5d5572;
+  --em-line: rgba(42, 3, 76, .14);
+  --em-accent: var(--em-teal);
+  --em-accent-text: #007a62;
+  --em-accent-soft: #d9f5ed;
+  --em-on-accent: var(--em-teal-ink);
+  --em-warn: #8a5a00;
+  --em-warn-soft: #fff1cc;
+  --em-error: #b0226b;
+  --em-error-soft: #fde6f1;
+  --em-well: #f1eef7;
+  --em-shadow-dialog: 0 30px 90px rgba(42, 3, 76, .16);
+  color-scheme: light;
+}
+
+/* A themed region paints its own ground, so it reads correctly inside either theme. */
+[data-em-theme] { background: var(--em-bg); color: var(--em-text); }
+
+/* Base */
+.em-body { margin: 0; background: var(--em-bg); color: var(--em-text); font-family: var(--em-font); font-synthesis: none; text-rendering: optimizeLegibility; }
+.em-body button, .em-body input, .em-body select, .em-body textarea { font: inherit; color: inherit; }
+
+/* Type */
+.em-eyebrow { margin: 0 0 .5rem; color: var(--em-accent-text); font-size: .72rem; font-weight: 600; letter-spacing: var(--em-track-caps); text-transform: uppercase; }
+.em-h1 { margin: 0; font-size: clamp(2rem, 6vw, 3.4rem); font-weight: 700; line-height: 1; letter-spacing: var(--em-track-tight); text-wrap: balance; }
+.em-h2 { margin: 0; font-size: clamp(1.75rem, 3.3vw, 3.2rem); font-weight: 700; line-height: 1; letter-spacing: var(--em-track-tight); text-wrap: balance; }
+.em-h3 { margin: 0; font-size: 1.17rem; font-weight: 700; }
+.em-lead { margin: 0; max-width: 680px; color: var(--em-muted); line-height: 1.6; }
+.em-muted { color: var(--em-muted); }
+.em-label { color: var(--em-muted); font-size: .76rem; letter-spacing: .08em; text-transform: uppercase; }
+.em-number { font-size: clamp(1.9rem, 4vw, 3.35rem); font-weight: 700; letter-spacing: var(--em-track-tighter); font-variant-numeric: tabular-nums; }
+
+/* Product signature: two-line wordmark, product name above "by Emota" */
+.em-signature { display: inline-grid; gap: .08em; width: fit-content; font-family: var(--em-font); line-height: .94; }
+.em-signature strong { font: inherit; font-weight: 700; letter-spacing: var(--em-track-tight); }
+.em-signature small { font: inherit; font-size: .56em; font-weight: 600; letter-spacing: .04em; color: var(--em-accent-text); }
+
+/* Logo lockup: blackberry file on light grounds, white file on dark grounds */
+.em-lockup { width: 178px; height: auto; object-fit: contain; }
+
+/* Buttons */
+.em-btn { display: inline-flex; align-items: center; justify-content: center; gap: .45rem; padding: .65rem .85rem; border: 1px solid var(--em-line); border-radius: var(--em-radius-control); background: var(--em-surface-2); color: var(--em-text); font-size: .76rem; font-weight: 700; letter-spacing: .015em; cursor: pointer; }
+.em-btn:hover { border-color: color-mix(in srgb, var(--em-accent) 70%, transparent); }
+.em-btn:focus-visible { outline: 2px solid var(--em-accent); outline-offset: 2px; }
+.em-btn:disabled { cursor: wait; opacity: .5; }
+.em-btn--primary { background: var(--em-accent); color: var(--em-on-accent); border-color: transparent; font-weight: 800; }
+.em-btn--ghost { background: transparent; border-color: transparent; color: var(--em-muted); }
+.em-btn--danger { color: #fff2f3; border-color: #ee8290; background: #662532; }
+.em-btn--danger:hover { background: #85313f; border-color: #ee8290; }
+.em-link { padding: 0; border: 0; background: transparent; color: var(--em-accent-text); font-size: .78rem; font-weight: 700; text-decoration: none; cursor: pointer; }
+.em-link:hover { color: var(--em-text); }
+
+/* Form fields */
+.em-field { display: grid; gap: .5rem; color: var(--em-muted); font-size: .85rem; }
+.em-input { width: 100%; padding: .75rem .85rem; border: 1px solid var(--em-line); border-radius: var(--em-radius-control); background: var(--em-surface-2); color: var(--em-text); }
+.em-input:focus-visible { outline: 2px solid var(--em-accent); outline-offset: 1px; }
+.em-help { color: var(--em-muted); font-size: .76rem; line-height: 1.35; }
+
+/* Segmented control */
+.em-segmented { display: flex; width: fit-content; padding: .25rem; border-radius: 12px; background: var(--em-surface-2); }
+.em-segmented button { padding: .55rem .85rem; border: 0; border-radius: var(--em-radius-control); background: transparent; color: var(--em-text); font-size: .76rem; font-weight: 700; cursor: pointer; }
+.em-segmented button[aria-pressed="true"] { background: var(--em-accent); color: var(--em-on-accent); }
+
+/* Surfaces */
+.em-panel { padding: 1.25rem; border: 1px solid var(--em-line); border-radius: var(--em-radius-panel); background: linear-gradient(135deg, color-mix(in srgb, var(--em-surface) 96%, #000), var(--em-surface)); }
+.em-card { padding: 1.2rem; border: 1px solid var(--em-line); border-radius: var(--em-radius-card); background: var(--em-surface); }
+.em-card.is-selected { border-color: var(--em-accent); box-shadow: inset 0 0 0 1px var(--em-accent); }
+.em-nested { padding: 1rem; border: 1px solid var(--em-line); border-radius: var(--em-radius-nested); background: rgba(255, 255, 255, .02); }
+.em-metric { display: flex; flex-direction: column; justify-content: space-between; min-height: 128px; padding: 1.1rem; border: 1px solid var(--em-line); border-radius: var(--em-radius-panel); background: var(--em-surface); }
+.em-metric > span { color: var(--em-muted); }
+.em-dialog { display: grid; gap: 1.25rem; width: min(100%, 440px); padding: 2.5rem; border: 1px solid var(--em-line); border-radius: var(--em-radius-dialog); background: color-mix(in srgb, var(--em-surface) 90%, var(--em-night-deep)); box-shadow: var(--em-shadow-dialog); }
+.em-backdrop { position: fixed; inset: 0; background: var(--em-backdrop); backdrop-filter: blur(8px); }
+.em-well { padding: .75rem; border-radius: var(--em-radius-panel); background: var(--em-well); color: var(--em-muted); font-family: var(--em-font-mono); font-size: .75rem; overflow: auto; }
+
+/* Status */
+.em-pill { display: inline-flex; align-items: center; gap: .4rem; width: max-content; padding: .4rem .75rem; border-radius: var(--em-radius-pill); font-size: .78rem; font-weight: 600; }
+.em-pill--good { background: var(--em-accent-soft); color: var(--em-accent-text); }
+.em-pill--warn { background: var(--em-warn-soft); color: var(--em-warn); }
+.em-pill--error { background: var(--em-error-soft); color: var(--em-error); }
+.em-tag { display: inline-flex; width: max-content; padding: .22rem .5rem; border: 1px solid var(--em-line); border-radius: var(--em-radius-pill); font-size: .68rem; font-weight: 800; text-transform: uppercase; }
+.em-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #535966; }
+.em-dot.is-on { background: var(--em-accent); box-shadow: var(--em-glow); }
+.em-msg-success { color: var(--em-accent-text); }
+.em-msg-error { color: var(--em-error); }
+
+/* Navigation rail item */
+.em-nav-item { display: block; width: 100%; padding: .65rem .85rem; border: 1px solid transparent; border-radius: var(--em-radius-control); background: transparent; color: var(--em-muted); font-size: .76rem; font-weight: 700; text-align: left; text-decoration: none; cursor: pointer; }
+.em-nav-item[aria-current="page"], .em-nav-item.is-active { color: var(--em-text); background: linear-gradient(90deg, rgba(0, 202, 159, .18), transparent); border-left-color: var(--em-accent); }
+
+/* Backgrounds */
+.em-bg-glow { background: radial-gradient(circle at 16% 12%, rgba(0, 202, 159, .2), transparent 30%), radial-gradient(circle at 80% 80%, rgba(121, 73, 240, .26), transparent 35%), var(--em-bg); }
+.em-bg-mesh { background: radial-gradient(circle at 17% 80%, color-mix(in srgb, var(--em-grape) 24%, transparent), transparent 31%), radial-gradient(circle at 80% 15%, color-mix(in srgb, var(--em-teal) 16%, transparent), transparent 27%), var(--em-blackberry); }
+.em-dropzone { display: grid; place-content: center; min-height: 180px; padding: 2rem; border: 1px dashed rgba(126, 245, 189, .35); border-radius: 16px; background: rgba(126, 245, 189, .03); text-align: center; }
