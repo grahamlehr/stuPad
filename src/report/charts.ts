@@ -62,6 +62,38 @@ export interface TapHeatmapData {
   thumbnail?: CanvasImageSource;
 }
 
+export interface SlideTimeChartEntry {
+  /** slide number, e.g. 3 (drawn as "Slide 3"; titles aren't in the deck model) */
+  slide: number;
+  /** timed stays on this slide (ReportStats.SlideTimeStat.visits); used only to choose which
+   * slides to keep when there are more than MAX_SLIDE_TIME_ROWS */
+  visits: number;
+  medianMs: number;
+  /** null when every visit through this slide ended by timeout (nothing left to show) */
+  medianMsExclTimeout: number | null;
+}
+
+export interface SlideTimeChartData {
+  entries: SlideTimeChartEntry[];
+}
+
+export interface PathTableEntry {
+  /** slide numbers in order, e.g. [3, 4, 5]; empty only for the synthetic "Other" row (use `label`) */
+  path: number[];
+  count: number;
+  /** 0..100 */
+  pct: number;
+  /** true for a path reconstructed from a visit that never reached return_home (see ReportStats.PathStat) */
+  ended: boolean;
+  /** overrides the path-derived text; used for the "Other" row (empty `path`) */
+  label?: string;
+}
+
+export interface PathTableData {
+  /** already the rows to draw (top paths plus an optional "Other" row); this function does no bucketing */
+  entries: PathTableEntry[];
+}
+
 const FONT_FAMILY = 'Helvetica, Arial, sans-serif';
 const TEXT_COLOR = '#1a1a1a';
 const MUTED_COLOR = '#666666';
@@ -561,4 +593,192 @@ export function drawTapHeatmap(
     const label = b.label.length > 18 ? `${b.label.slice(0, 17)}…` : b.label;
     ctx.fillText(label, bx + bw / 2, by + bh / 2);
   }
+}
+
+const SLIDE_TIME_COLOR = '#2A034C';
+/** Lighter tint of the brand blackberry, for the "excl. timeout returns" bar. */
+const SLIDE_TIME_EXCL_COLOR = '#B9A6D6';
+
+/**
+ * Maximum slides `drawSlideTimeChart` draws a row for. Beyond this, row labels start
+ * overlapping at typical PDF placement sizes (a chart drawn wide but placed narrow, with
+ * fontScale compensating text size upward; see report/pdf.ts `fontScaleFor`). When there
+ * are more slides than this, the busiest ones (most timed stays) are kept, shown in
+ * ascending slide order, and a note below the chart says how many more aren't shown.
+ */
+const MAX_SLIDE_TIME_ROWS = 16;
+
+/**
+ * Paired horizontal bars of median time spent per slide: one bar per slide for every
+ * timed stay, and a second, lighter bar excluding the last-slide stay of visits that
+ * ended by timeout (see `ReportStats.SlideTimeStat` for why that stay can be skewed).
+ * A slide with no excl.-timeout data (every visit through it ended by timeout) draws
+ * only the first bar. See `MAX_SLIDE_TIME_ROWS` for the row cap on decks with many
+ * destination slides.
+ */
+export function drawSlideTimeChart(
+  ctx: CanvasRenderingContext2D | null,
+  width: number,
+  height: number,
+  data: SlideTimeChartData,
+  fontScale = 1,
+): void {
+  if (!ctx) return;
+  clearBg(ctx, width, height);
+  const { entries } = data;
+  if (entries.length === 0) {
+    ctx.fillStyle = MUTED_COLOR;
+    ctx.font = scaledFont(16, fontScale);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('No data', width / 2, height / 2);
+    return;
+  }
+
+  const hiddenCount = Math.max(0, entries.length - MAX_SLIDE_TIME_ROWS);
+  const shown =
+    hiddenCount === 0
+      ? entries
+      : entries
+          .slice()
+          .sort((a, b) => b.visits - a.visits)
+          .slice(0, MAX_SLIDE_TIME_ROWS)
+          .sort((a, b) => a.slide - b.slide);
+
+  // legend
+  const legendH = Math.max(22, 20 * fontScale);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.font = scaledFont(12, fontScale);
+  const sw = Math.max(9, 10 * fontScale);
+  let lx = 4;
+  const ly = legendH / 2;
+  ctx.fillStyle = SLIDE_TIME_COLOR;
+  ctx.fillRect(lx, ly - sw / 2, sw, sw);
+  ctx.fillStyle = TEXT_COLOR;
+  const mainLabel = 'Median time on slide';
+  ctx.fillText(mainLabel, lx + sw + 6, ly);
+  lx += sw + 6 + ctx.measureText(mainLabel).width + 18;
+  ctx.fillStyle = SLIDE_TIME_EXCL_COLOR;
+  ctx.fillRect(lx, ly - sw / 2, sw, sw);
+  ctx.fillStyle = TEXT_COLOR;
+  ctx.fillText('excl. timeout returns', lx + sw + 6, ly);
+
+  const noteH = hiddenCount > 0 ? Math.max(16, 14 * fontScale) : 0;
+  const labelW = Math.min(Math.max(width * 0.2, 64 * fontScale), width * 0.32);
+  const valueW = Math.max(90, 64 * fontScale);
+  const plotX = labelW;
+  const plotW = width - labelW - valueW;
+  const plotTop = legendH;
+  const plotH = Math.max(1, height - legendH - noteH);
+  const max = Math.max(1, ...shown.map((e) => Math.max(e.medianMs, e.medianMsExclTimeout ?? 0)));
+  const rowH = plotH / shown.length;
+  const barH = Math.min(Math.max(9, 8 * fontScale), rowH * 0.34);
+  const barGap = Math.max(2, 2 * fontScale);
+
+  // Row text (slide label + values) never exceeds a fraction of the row's own height,
+  // however large fontScale asks for, so rows stay legible instead of overlapping.
+  const rowFontScale = Math.min(fontScale, Math.max(0.1, (rowH * 0.6) / 13));
+  ctx.font = scaledFont(13, rowFontScale);
+  shown.forEach((e, i) => {
+    const rowMid = plotTop + i * rowH + rowH / 2;
+    ctx.fillStyle = TEXT_COLOR;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`Slide ${e.slide}`, plotX - 10, rowMid);
+
+    const y1 = rowMid - barH - barGap / 2;
+    const w1 = (e.medianMs / max) * plotW;
+    ctx.fillStyle = SLIDE_TIME_COLOR;
+    ctx.fillRect(plotX, y1, Math.max(1, w1), barH);
+    ctx.fillStyle = MUTED_COLOR;
+    ctx.textAlign = 'left';
+    ctx.fillText(fmtMs(e.medianMs), plotX + w1 + 8, y1 + barH / 2);
+
+    if (e.medianMsExclTimeout !== null) {
+      const y2 = rowMid + barGap / 2;
+      const w2 = (e.medianMsExclTimeout / max) * plotW;
+      ctx.fillStyle = SLIDE_TIME_EXCL_COLOR;
+      ctx.fillRect(plotX, y2, Math.max(1, w2), barH);
+      ctx.fillStyle = MUTED_COLOR;
+      ctx.textAlign = 'left';
+      ctx.fillText(fmtMs(e.medianMsExclTimeout), plotX + w2 + 8, y2 + barH / 2);
+    }
+  });
+
+  if (hiddenCount > 0) {
+    ctx.fillStyle = MUTED_COLOR;
+    ctx.font = scaledFont(11, fontScale);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(`+${hiddenCount} more slides not shown`, width / 2, height - 2);
+  }
+}
+
+/**
+ * A simple table of the most common paths through the deck: "3 → 4 → 5" style labels
+ * (drawn on canvas, not `doc.text`, so the arrow glyph, which is outside jsPDF's built-in
+ * Helvetica/WinAnsi range, still renders), with a count and % column. An ended path
+ * (see `ReportStats.PathStat`) is suffixed " (ended)"; the caller supplies rows already
+ * bucketed (top paths plus an optional "Other" row using `label`).
+ */
+export function drawPathTable(
+  ctx: CanvasRenderingContext2D | null,
+  width: number,
+  height: number,
+  data: PathTableData,
+  fontScale = 1,
+): void {
+  if (!ctx) return;
+  clearBg(ctx, width, height);
+  const { entries } = data;
+  if (entries.length === 0) {
+    ctx.fillStyle = MUTED_COLOR;
+    ctx.font = scaledFont(16, fontScale);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('No data', width / 2, height / 2);
+    return;
+  }
+
+  const headerH = Math.max(24, 22 * fontScale);
+  const pctColW = Math.max(56, 44 * fontScale);
+  const pathColX = 6;
+  const countColRight = width - pctColW - 8;
+  const pctColRight = width - 8;
+  const rowH = Math.max(18, (height - headerH) / entries.length);
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.font = scaledFont(12, fontScale, true);
+  ctx.fillStyle = TEXT_COLOR;
+  ctx.fillText('Path', pathColX, headerH / 2);
+  ctx.textAlign = 'right';
+  ctx.fillText('Count', countColRight, headerH / 2);
+  ctx.fillText('%', pctColRight, headerH / 2);
+
+  ctx.strokeStyle = GRID_COLOR;
+  ctx.beginPath();
+  ctx.moveTo(0, headerH);
+  ctx.lineTo(width, headerH);
+  ctx.stroke();
+
+  ctx.font = scaledFont(12, fontScale);
+  entries.forEach((e, i) => {
+    const y = headerH + i * rowH + rowH / 2;
+    if (y > height) return;
+    const base = e.label ?? e.path.join(' → ');
+    const text = e.ended ? `${base} (ended)` : base;
+    const truncated = text.length > 42 ? `${text.slice(0, 41)}…` : text;
+
+    ctx.fillStyle = TEXT_COLOR;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(truncated, pathColX, y);
+
+    ctx.fillStyle = MUTED_COLOR;
+    ctx.textAlign = 'right';
+    ctx.fillText(String(e.count), countColRight, y);
+    ctx.fillText(fmtPct(e.pct), pctColRight, y);
+  });
 }

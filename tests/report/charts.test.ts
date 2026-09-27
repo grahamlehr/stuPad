@@ -7,6 +7,8 @@ import {
   drawPercentBarChart,
   drawHeatmapChart,
   drawTapHeatmap,
+  drawSlideTimeChart,
+  drawPathTable,
 } from '../../src/report/charts';
 import { makeMockCtx } from './mockCtx';
 
@@ -31,6 +33,12 @@ describe('chart functions guard a null context', () => {
   });
   it('drawTapHeatmap does not throw with a null ctx', () => {
     expect(() => drawTapHeatmap(null, 100, 100, { grid: [], buttons: [], deckHeight: 1080 })).not.toThrow();
+  });
+  it('drawSlideTimeChart does not throw with a null ctx', () => {
+    expect(() => drawSlideTimeChart(null, 100, 100, { entries: [] })).not.toThrow();
+  });
+  it('drawPathTable does not throw with a null ctx', () => {
+    expect(() => drawPathTable(null, 100, 100, { entries: [] })).not.toThrow();
   });
 });
 
@@ -160,5 +168,96 @@ describe('drawTapHeatmap', () => {
     expect(() =>
       drawTapHeatmap(ctx, 800, 450, { grid: [[1]], buttons, deckHeight: 1080, thumbnail: fakeBitmap }),
     ).not.toThrow();
+  });
+});
+
+describe('drawSlideTimeChart', () => {
+  it('draws a "No data" placeholder for an empty entry list', () => {
+    const { ctx, calls } = makeMockCtx();
+    drawSlideTimeChart(ctx, 400, 300, { entries: [] });
+    const text = calls.find((c) => c.method === 'fillText');
+    expect(text?.args[0]).toBe('No data');
+  });
+
+  it('draws both bars for a slide with excl.-timeout data, and only one otherwise', () => {
+    const { ctx, callCount } = makeMockCtx();
+    drawSlideTimeChart(ctx, 600, 300, {
+      entries: [
+        { slide: 2, visits: 3, medianMs: 5000, medianMsExclTimeout: 4000 },
+        { slide: 3, visits: 2, medianMs: 8000, medianMsExclTimeout: null },
+      ],
+    });
+    // background fill + legend swatches (2) + slide-2's two bars + slide-3's one bar
+    expect(callCount('fillRect')).toBe(1 + 2 + 2 + 1);
+  });
+
+  it('labels rows "Slide N"', () => {
+    const { ctx, calls } = makeMockCtx();
+    drawSlideTimeChart(ctx, 600, 300, { entries: [{ slide: 7, visits: 1, medianMs: 1000, medianMsExclTimeout: null }] });
+    const labels = calls.filter((c) => c.method === 'fillText').map((c) => c.args[0]);
+    expect(labels).toContain('Slide 7');
+  });
+
+  it('caps at 16 rows, keeping the busiest slides by visits and a "+N more" note', () => {
+    const { ctx, calls } = makeMockCtx();
+    // 30 slides, slide N has N visits (2..31), so the 16 busiest are slides 16..31
+    const entries = Array.from({ length: 30 }, (_, i) => ({
+      slide: i + 2,
+      visits: i + 2,
+      medianMs: 1000,
+      medianMsExclTimeout: null,
+    }));
+    drawSlideTimeChart(ctx, 600, 300, { entries });
+
+    const texts = calls.filter((c) => c.method === 'fillText').map((c) => c.args[0]);
+    const slideLabels = texts.filter((t) => typeof t === 'string' && t.startsWith('Slide '));
+    expect(slideLabels).toHaveLength(16);
+    // busiest 16 slides are 16..31, shown in ascending order
+    expect(slideLabels).toEqual(Array.from({ length: 16 }, (_, i) => `Slide ${i + 16}`));
+    expect(texts).toContain('+14 more slides not shown');
+  });
+
+  it('does not show a "more" note when entries fit within the row cap', () => {
+    const { ctx, calls } = makeMockCtx();
+    const entries = Array.from({ length: 16 }, (_, i) => ({
+      slide: i + 2,
+      visits: 1,
+      medianMs: 1000,
+      medianMsExclTimeout: null,
+    }));
+    drawSlideTimeChart(ctx, 600, 300, { entries });
+    const texts = calls.filter((c) => c.method === 'fillText').map((c) => c.args[0]);
+    expect(texts.some((t) => typeof t === 'string' && t.includes('more slides not shown'))).toBe(false);
+  });
+});
+
+describe('drawPathTable', () => {
+  it('draws a "No data" placeholder for an empty entry list', () => {
+    const { ctx, calls } = makeMockCtx();
+    drawPathTable(ctx, 400, 300, { entries: [] });
+    const text = calls.find((c) => c.method === 'fillText');
+    expect(text?.args[0]).toBe('No data');
+  });
+
+  it('draws the arrow-joined path, count and pct for each row, and marks an ended path', () => {
+    const { ctx, calls } = makeMockCtx();
+    drawPathTable(ctx, 500, 200, {
+      entries: [
+        { path: [3, 4, 5], count: 12, pct: 60, ended: false },
+        { path: [3, 4], count: 3, pct: 15, ended: true },
+      ],
+    });
+    const texts = calls.filter((c) => c.method === 'fillText').map((c) => c.args[0]);
+    expect(texts).toContain('3 → 4 → 5');
+    expect(texts).toContain('3 → 4 (ended)');
+    expect(texts).toContain('12');
+    expect(texts).toContain('60.0%');
+  });
+
+  it('uses the label override for a synthetic "Other" row with an empty path', () => {
+    const { ctx, calls } = makeMockCtx();
+    drawPathTable(ctx, 500, 200, { entries: [{ path: [], label: 'Other', count: 5, pct: 25, ended: false }] });
+    const texts = calls.filter((c) => c.method === 'fillText').map((c) => c.args[0]);
+    expect(texts).toContain('Other');
   });
 });

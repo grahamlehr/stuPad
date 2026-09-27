@@ -100,6 +100,17 @@ Only `pointerdown` is used for taps, so the 150 ms tap-to-slide budget is not sp
 ```ts
 computeStats(events: LogEvent[], labels: Record<string,string>): ReportStats  // pure, heavily tested
 // ReportStats.missGrid: number[][], MISS_GRID_ROWS x MISS_GRID_COLS (27 x 48) home-slide miss-tap density, missGrid[row][col]
+// ReportStats.slideTime: SlideTimeStat[] = { slide, visits, medianMs, meanMs, medianMsExclTimeout, visitsExclTimeout }[]
+//   one entry per slide with a timed stay (see visitPaths below); medianMsExclTimeout/visitsExclTimeout
+//   exclude the last-slide stay of timeout-ended visits (timeout skew), null when none remain
+// ReportStats.topPaths: PathStat[] = { path: number[], count, ended }[], top 8 by count desc
+// ReportStats.otherPaths: number   // path-tracked visits not in topPaths
+// ReportStats.totalPaths: number   // topPaths' counts + otherPaths, for the % column
+//   "visitPaths": a pass (folded into computeStats' single loop) that reconstructs each visit's
+//   route (button target slide, then each slide_nav.slide_to) from button_press/slide_nav/return_home,
+//   keyed by visit_id in an open-visits map, closed on return_home. It's orphaned instead (counted in
+//   paths as ended, left out of slideTime) on a new button_press, an app_resume/kiosk_start/kiosk_stop,
+//   or end of the event list. A slide_nav/return_home with no matching button_press is ignored.
 toCsv(events): string; csvFileName(sessionName, now): string
 buildPdf(events, deck, config, homeThumbPng?: Blob): Promise<Blob>   // A4 landscape, pages per SPEC; jsPDF is lazy-imported
 pdfFileName(sessionName, now): string                                // same <session>_<yyyy-mm-dd-hhmm> pattern as csvFileName
@@ -108,6 +119,8 @@ buttonColor(i: number): string    // consistent palette across all charts
 returnMethodColor(m: ReturnMethod): string        // in src/report/colors.ts; not re-exported from index.ts
 draw*Chart(ctx, width, height, data, fontScale?)  // donut, dwell bar, activity, bar, percent bar, heatmap: hand-drawn canvas charts (src/report/charts.ts)
 drawTapHeatmap(ctx, w, h, { grid, buttons, deckHeight, thumbnail? }, fontScale?)  // home-slide miss-tap grid + button outlines, thumbnail optional (src/report/charts.ts)
+drawSlideTimeChart(ctx, w, h, { entries: { slide, medianMs, medianMsExclTimeout }[] }, fontScale?)  // paired horizontal bars, median time per slide; caps at the 16 busiest slides (by stays, then ascending slide order) with a "+N more" note (src/report/charts.ts)
+drawPathTable(ctx, w, h, { entries: { path, count, pct, ended, label? }[] }, fontScale?)  // "3 → 4 → 5" style table drawn on canvas, so the arrow renders (jsPDF's Helvetica can't); caller does the top-8/"Other" bucketing (src/report/charts.ts)
 ```
 
 ## Conventions
