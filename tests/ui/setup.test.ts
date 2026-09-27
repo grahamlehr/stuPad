@@ -125,6 +125,114 @@ describe('SetupScreen: clear previous data', () => {
   });
 });
 
+describe('SetupScreen: secret exit sequence hint', () => {
+  function hintText(container: HTMLElement): string | null | undefined {
+    return container.querySelector('[data-step="configure"] p.muted')?.textContent;
+  }
+
+  it('describes the default pattern (corners clockwise) and window', () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+    expect(hintText(container)).toBe(
+      'Tap top-left, top-right, bottom-right, then bottom-left, within 5 seconds, on any slide.',
+    );
+    screen.destroy();
+  });
+
+  it('describes the tl3_br2 pattern distinctly from the four-corner patterns', () => {
+    const container = document.createElement('div');
+    const initialConfig = { ...defaultConfig('deck.pptx'), secretPattern: 'tl3_br2' as const };
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+    expect(hintText(container)).toBe(
+      'Tap top-left three times, then bottom-right twice, within 5 seconds, on any slide.',
+    );
+    screen.destroy();
+  });
+
+  it('updates live when the pattern select changes', () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+    const selects = container.querySelectorAll<HTMLSelectElement>('[data-step="configure"] select');
+    const patternSelect = Array.from(selects).find((s) =>
+      Array.from(s.options).some((o) => o.value === 'corners_ccw'),
+    )!;
+    patternSelect.value = 'corners_ccw';
+    patternSelect.dispatchEvent(new Event('change'));
+
+    expect(hintText(container)).toBe(
+      'Tap top-left, bottom-left, bottom-right, then top-right, within 5 seconds, on any slide.',
+    );
+    screen.destroy();
+  });
+
+  it('updates live when the window select changes', () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+    const selects = container.querySelectorAll<HTMLSelectElement>('[data-step="configure"] select');
+    const windowSelect = Array.from(selects).find((s) =>
+      Array.from(s.options).some((o) => o.value === '8000'),
+    )!;
+    windowSelect.value = '8000';
+    windowSelect.dispatchEvent(new Event('change'));
+
+    expect(hintText(container)).toBe(
+      'Tap top-left, top-right, bottom-right, then bottom-left, within 8 seconds, on any slide.',
+    );
+    screen.destroy();
+  });
+
+  it('shows a stored out-of-list window value rather than silently changing it', () => {
+    const container = document.createElement('div');
+    const initialConfig = { ...defaultConfig('deck.pptx'), secretWindowMs: 6000 };
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+    const selects = container.querySelectorAll<HTMLSelectElement>('[data-step="configure"] select');
+    const windowSelect = Array.from(selects).find((s) =>
+      Array.from(s.options).some((o) => o.value === '6000'),
+    );
+    expect(windowSelect?.value).toBe('6000');
+    expect(hintText(container)).toBe(
+      'Tap top-left, top-right, bottom-right, then bottom-left, within 6 seconds, on any slide.',
+    );
+    screen.destroy();
+  });
+});
+
+describe('SetupScreen: transition length control', () => {
+  it('shows the length select only when transition is fade', () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+    let selects = container.querySelectorAll<HTMLSelectElement>('[data-step="configure"] select');
+    let msSelect = Array.from(selects).find((s) => Array.from(s.options).some((o) => o.value === '300'));
+    expect(msSelect).toBeTruthy();
+
+    const transitionSelect = Array.from(selects).find(
+      (s) => Array.from(s.options).some((o) => o.value === 'none') && Array.from(s.options).some((o) => o.value === 'fade'),
+    )!;
+    transitionSelect.value = 'none';
+    transitionSelect.dispatchEvent(new Event('change'));
+
+    selects = container.querySelectorAll<HTMLSelectElement>('[data-step="configure"] select');
+    msSelect = Array.from(selects).find((s) => Array.from(s.options).some((o) => o.value === '300'));
+    expect(msSelect).toBeUndefined();
+    screen.destroy();
+  });
+
+  it('shows a stored out-of-list transitionMs value rather than silently changing it', () => {
+    const container = document.createElement('div');
+    const initialConfig = { ...defaultConfig('deck.pptx'), transitionMs: 275 };
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+    const selects = container.querySelectorAll<HTMLSelectElement>('[data-step="configure"] select');
+    const msSelect = Array.from(selects).find((s) => Array.from(s.options).some((o) => o.value === '275'));
+    expect(msSelect?.value).toBe('275');
+    screen.destroy();
+  });
+});
+
 describe('SetupScreen: button glow settings', () => {
   it('shows only the on/off switch while the glow is off', () => {
     const container = document.createElement('div');

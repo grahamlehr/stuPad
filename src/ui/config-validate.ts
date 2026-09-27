@@ -33,6 +33,14 @@ export function validateConfig(config: KioskConfig): string[] {
     errors.push('Debounce must not be negative.');
   }
 
+  if (config.transitionMs < 0 || config.transitionMs > 1000) {
+    errors.push('Transition length must be between 0 and 1000 ms.');
+  }
+
+  if (config.secretWindowMs < 2000 || config.secretWindowMs > 15000) {
+    errors.push('Secret exit sequence window must be between 2 and 15 seconds.');
+  }
+
   const { glow } = config;
   if (glow.enabled) {
     if (!/^#[0-9a-f]{6}$/i.test(glow.color)) {

@@ -58,6 +58,20 @@ describe('validateConfig', () => {
     expect(validateConfig({ ...defaultConfig('deck.pptx'), debounceMs: -1 }).length).toBeGreaterThan(0);
   });
 
+  it('rejects an out-of-range transition length', () => {
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), transitionMs: -1 }).length).toBeGreaterThan(0);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), transitionMs: 1001 }).length).toBeGreaterThan(0);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), transitionMs: 0 })).toEqual([]);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), transitionMs: 1000 })).toEqual([]);
+  });
+
+  it('rejects an out-of-range secret exit sequence window', () => {
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), secretWindowMs: 1999 }).length).toBeGreaterThan(0);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), secretWindowMs: 15001 }).length).toBeGreaterThan(0);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), secretWindowMs: 2000 })).toEqual([]);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), secretWindowMs: 15000 })).toEqual([]);
+  });
+
   it('validates the button glow only when it is on', () => {
     const glow = { enabled: true, color: '#ffc400', intensity: 5, periodMs: 2000 };
     expect(validateConfig({ ...defaultConfig('deck.pptx'), glow })).toEqual([]);

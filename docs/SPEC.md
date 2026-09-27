@@ -119,9 +119,9 @@ The preview shows the home slide with each detected button outlined and labelled
 | Idle warning before timeout | Off | Show countdown in last 5 s |
 | Button press feedback | Brief highlight | None / highlight / scale |
 | Button glow | Off | A pulsing glow around every tappable area (home-slide buttons, Home, Next/Back links, and the fallback Home button), following each shape's outline (ellipse, rounded or square corners; pictures and groups get softly rounded corners). Colour: seven swatches or any colour from the picker. Intensity 1 to 10. Speed 0.5 to 4 s per pulse. The Setup preview shows it live |
-| Transition | Fade 300 ms | None / fade (the 300 ms length is fixed) |
+| Transition | Fade 300 ms | None / fade, with a length of 150, 300, 500 or 800 ms when fade is selected |
 | Debounce | 800 ms | 0 or more ms; repeat taps within this window are ignored |
-| Secret exit sequence | Four corners clockwise from top-left, within 5 s | Corners clockwise from top-left / corners counter-clockwise from top-left / top-left ×3 then bottom-right ×2. The 5 s window is fixed; a corner is the outer 12% of the slide's width and height |
+| Secret exit sequence | Four corners clockwise from top-left, within 5 s | Corners clockwise from top-left / corners counter-clockwise from top-left / top-left ×3 then bottom-right ×2, with a window of 3, 5, 8 or 10 s. A corner is the outer 12% of the slide's width and height |
 | Admin PIN after sequence | Off | 4 to 6 digits |
 | Session name | Deck file name + date | Free text, required, printed on reports and used in export file names |
 
