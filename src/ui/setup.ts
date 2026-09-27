@@ -1,5 +1,5 @@
 /**
- * Setup screen: one scrolling screen with four steps (SPEC "Admin setup flow"):
+ * Setup screen: one scrolling screen with five steps (SPEC "Admin setup flow"):
  * Load -> Check -> Preview -> Configure -> Go live.
  */
 import type { Deck, Issue, KioskConfig, ButtonDef, Rect, GlowConfig } from '../types';

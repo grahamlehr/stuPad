@@ -1,12 +1,12 @@
 # iPad PowerPoint Kiosk App: Specification
 
-Sep 24, 2026 · @Graham Lehr
+Sep 24, 2026 (updated Sep 27, 2026) · @Graham Lehr
 
 This is the requirements document. For how the implementation works and where things live in the code, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Overview and goals
 
-An installable web app (PWA) turns a structured PowerPoint file into a self-running, touch-driven iPad kiosk that logs every interaction and produces CSV and PDF reports offline.
+GGPad (the codebase is named stuPad) is an installable web app (PWA) that turns a structured PowerPoint file into a self-running, touch-driven iPad kiosk that logs every interaction and produces CSV and PDF reports offline.
 
 Goals for v1:
 
@@ -80,17 +80,19 @@ Buttons are ordinary shapes on slide 1 with PowerPoint's own "Link to: Slide N" 
 | Animations, transitions | No | Ignored; app uses its own fade |
 | Video, audio | No | Candidate for v2 |
 
-**Fonts.** Use fonts embedded in the file, the web fonts bundled with the app (Inter, Lato, Montserrat, Open Sans, Roboto; Latin scripts), or iPad system fonts. Anything else falls back and is flagged at setup.
+**Fonts.** Use the web fonts bundled with the app (Inter, Lato, Montserrat, Open Sans, Roboto; Latin scripts) or iPad system fonts. Anything else falls back to a system font and is flagged at setup. Fonts embedded in the .pptx are not read, so embedding a font does not help.
 
 **Slide size.** 16:9 (13.333 x 7.5 in). Other sizes are letterboxed.
 
-The app should ship with a downloadable template .pptx that follows all these rules. The template is titled "GGPad Kiosk Template" and uses the Emota brand: Montserrat throughout, a blackberry home slide with the white Emota logo, light-lavender destination slides with the blackberry logo, and home buttons in teal, violet, grape and mint. Its theme colours and fonts are set to the Emota palette and Montserrat, so shapes and text added in PowerPoint start on-brand.
+The app ships with a downloadable template .pptx (`public/template.pptx`, edited by hand in PowerPoint) that follows all these rules. Its home slide is headed "GGPad Kiosk Template" and has buttons for Guide, Innovation, People, Contact and T&Cs. The Guide slides explain how to build a deck; the three topic slides are plain destinations with Home and T&Cs links; the T&Cs slide demonstrates a "Last Slide Viewed" Back link; and a final "Template rules" slide is deliberately unlinked, so loading the template shows one warning. It uses the Emota brand: Montserrat throughout, a blackberry home slide with the white Emota logo, light-lavender destination slides with the blackberry logo, and home buttons in teal, violet, grape and mint. Its theme colours and fonts are set to the Emota palette and Montserrat, so shapes and text added in PowerPoint start on-brand.
 
 ## Admin setup flow
 
 Setup is one scrolling screen with five steps: load, check, preview, configure, go live.
 
-The admin screens (Setup, admin panel, PIN pad, dialogs) use the Emota brand from `docs/brand/` (`emota-brand.css` and its cheat sheet): Montserrat, blackberry and night surfaces, and teal as the single accent. They are dark by default and switch to the brand's light variant when the iPad is set to light appearance. The Setup screen shows the Emota logo right-aligned beside the app name (the white file on dark, the blackberry file on light). Slides are never restyled.
+The admin screens (Setup, admin panel, PIN pad, dialogs) use the Emota brand from `docs/brand/` (`emota-brand.css` and its cheat sheet): Montserrat, blackberry and night surfaces, and teal as the single accent. They are dark by default and switch to the brand's light variant when the iPad is set to light appearance. The Setup screen shows the Emota logo right-aligned beside the app name (the white file on dark, the blackberry file on light), with the app version (`v` plus the `package.json` version) as a subheading; the page title shows the same version. Slides are never restyled.
+
+The Load step also offers "Download template deck", and the Go live step shows how many events are stored and how much of the iPad's storage quota is used.
 
 ```mermaid
 flowchart LR
@@ -101,9 +103,9 @@ flowchart LR
     D --> E[Go live:<br/>checklist, start kiosk]
 ```
 
-Validation errors (fewer than 2 buttons, broken links, unreadable file) block go-live. Warnings (missing fonts, unsupported elements, unlinked slides) are shown but can be accepted.
+Validation errors (fewer than 2 buttons, broken links, unreadable file, no slides, file over 100 MB) block go-live. Warnings (missing fonts, unsupported elements, unlinked slides, no way back to slide 1, non-16:9 size, buttons under 44 pt, a shape linked to its own slide) are shown and must be accepted with a checkbox before going live. Invalid settings in Configure also block go-live.
 
-The preview shows the home slide with each detected button outlined and labelled, plus a thumbnail of each destination slide. Tapping a button in preview navigates as it will in kiosk mode.
+The preview shows the home slide with each detected button outlined and labelled, plus a thumbnail of every slide (unlinked slides are marked). Tapping a button, nav link or back link in preview navigates as it will in kiosk mode, and "Back to home" returns to slide 1. An "image mode" checkbox rasterises every slide once to a PNG (the fallback above); a slide that cannot be rasterised keeps rendering live and the admin is told how many failed.
 
 **Clear previous data.** The Load step has a "Clear previous data" button so the iPad can be handed to someone new without the last user's slides still showing. It removes the stored deck (with its images), settings, kiosk state and every logged event, then reloads into an empty Setup. It requires typing `CLEAR`, warns that logged taps cannot be recovered, and the wipe is itself logged as a single `log_cleared` record. The same action is on the admin panel.
 
@@ -117,13 +119,13 @@ The preview shows the home slide with each detected button outlined and labelled
 | Idle warning before timeout | Off | Show countdown in last 5 s |
 | Button press feedback | Brief highlight | None / highlight / scale |
 | Button glow | Off | A pulsing glow around every tappable area (home-slide buttons, Home, Next/Back links, and the fallback Home button), following each shape's outline (ellipse, rounded or square corners; pictures and groups get softly rounded corners). Colour: seven swatches or any colour from the picker. Intensity 1 to 10. Speed 0.5 to 4 s per pulse. The Setup preview shows it live |
-| Transition | Fade 300 ms | None / fade |
-| Debounce | 800 ms | Ignore repeat taps within this window |
-| Secret exit sequence | Four corners clockwise from top-left, within 5 s | Choice of 2 or 3 patterns |
+| Transition | Fade 300 ms | None / fade (the 300 ms length is fixed) |
+| Debounce | 800 ms | 0 or more ms; repeat taps within this window are ignored |
+| Secret exit sequence | Four corners clockwise from top-left, within 5 s | Corners clockwise from top-left / corners counter-clockwise from top-left / top-left ×3 then bottom-right ×2. The 5 s window is fixed; a corner is the outer 12% of the slide's width and height |
 | Admin PIN after sequence | Off | 4 to 6 digits |
-| Session name | Deck file name + date | Free text, printed on reports |
+| Session name | Deck file name + date | Free text, required, printed on reports and used in export file names |
 
-Settings and the parsed deck are saved to IndexedDB, so reopening the app resumes where it left off, including straight back into kiosk mode if it was running.
+Loading a new deck resets every setting to its default. Settings and the parsed deck are saved to IndexedDB, so reopening the app resumes where it left off, including straight back into kiosk mode if it was running.
 
 ## Kiosk mode behaviour
 
@@ -151,7 +153,8 @@ stateDiagram-v2
 - Repeat taps within the debounce window are ignored and not logged as presses.
 - Pinch-zoom, text selection, long-press menus, pull-to-refresh and double-tap zoom are disabled.
 - The screen is kept awake with the Screen Wake Lock API; if unavailable, the admin is told to set Auto-Lock to Never.
-- The secret sequence works on any slide and is checked before normal tap handling, so corner taps do not trigger buttons.
+- The secret sequence works on any slide and is checked before normal tap handling. A tap that continues or completes a sequence is consumed and never triggers a button. The first corner tap of a sequence is handled normally, so a button placed in a corner still works; the trade-off is that starting the sequence on a slide with a top-left button presses that button once.
+- Taps in the letterbox (outside the slide) do nothing and are not logged.
 - If the app is closed or crashes, it relaunches straight into kiosk mode on the home slide.
 
 **Operator checklist (shown when starting kiosk)**
@@ -176,6 +179,7 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | `miss_tap` | Tap on the home slide outside any button |
 | `app_resume` | App relaunches or returns to foreground in kiosk mode |
 | `admin_unlock_fail` | Wrong PIN entered after the secret sequence |
+| `log_cleared` | Clear log or Clear previous data wiped the log; the only record left after the wipe |
 
 **Record fields**
 
@@ -188,26 +192,28 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | `event` | enum, as above | button\_press |
 | `button_id` | shape id from the PPTX; on `slide_nav`, the id of the button that started the visit | 4 |
 | `button_label` | text; on `slide_nav`, the label of the button that started the visit | Sustainability |
-| `slide_from` / `slide_to` | integer; on `slide_nav`, the slide being left and the slide being entered | 1 / 3 |
+| `slide_from` / `slide_to` | integer; on `slide_nav`, the slide being left and the slide being entered; on `return_home`, the slide being left and 1; on `miss_tap`, `slide_from` is 1 | 1 / 3 |
 | `method` | enum, return events only | timeout |
 | `dwell_ms` | integer; on `return_home`, time for the whole visit; on `slide_nav`, time spent on just the slide being left | 18420 |
-| `x`, `y` | tap position as % of slide, miss taps only | 12.5, 88.0 |
+| `x`, `y` | tap position as % of slide, rounded to 0.1, miss taps only | 12.5, 88.0 |
 
 `dwell_ms` on each return gives time spent per destination, which is the most useful engagement measure after raw press counts. `slide_nav` events let a report break that down further into time spent per slide within a multi-slide visit, and count arrivals at each slide.
 
-Logs persist until the admin explicitly clears them after export, either with Clear log or with Clear previous data (which also removes the deck and settings). Both require a confirmation and are themselves logged.
+Logs persist until the admin explicitly clears them after export, either with Clear log or with Clear previous data (which also removes the deck and settings). Both delete every stored event, not just the current session's, require typing `CLEAR`, and are themselves logged as `log_cleared`.
 
 ## Exit and reporting (CSV and PDF)
 
 After the secret sequence (and PIN, if set) the admin lands on an admin panel with Resume, Export, Clear log, Clear previous data and Setup. Three wrong PIN entries, or 30 s without input, return to the kiosk without granting access; each wrong entry is logged as `admin_unlock_fail`. Clearing the log, or clearing all previous data, requires typing `CLEAR`.
 
+The panel shows the current session's presses, visits, average dwell and miss taps, plus the total number of stored events and the storage used. Resume returns to the same session (no new `kiosk_start`). Setup ends the session (`kiosk_stop`) and returns to the Setup screen with the deck and settings intact.
+
 **Getting files off the iPad.** Exports use the iOS share sheet (Web Share API with files), giving Save to Files, AirDrop and Mail. Plain browser downloads are unreliable in Home Screen web apps, so they are only a fallback.
 
-**Export scope.** Current session, a date range, or all data.
+**Export scope.** Current session, a date range, or all data. The panel shows how many events are in the chosen scope before exporting.
 
 **CSV**
 
-One row per event, all fields from the data model, UTF-8 with a header row. File name: `<session-name>_<yyyy-mm-dd-hhmm>.csv`.
+One row per event, all fields from the data model, with a header row. RFC 4180 quoting, CRLF line endings, and UTF-8 with a byte-order mark so Excel reads non-ASCII labels correctly. File name: `<session-name>_<yyyy-mm-dd-hhmm>.csv`.
 
 ```csv
 id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,method,dwell_ms,x,y
@@ -219,13 +225,13 @@ id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,metho
 
 | Page | Content |
 | --- | --- |
-| 1. Summary | Session name, date/time range, total presses, total visits, average dwell, thumbnail of home slide; a compact "Slide views" table (arrivals per slide) when the deck has any onward nav taps |
-| 2. Button share | Pie or donut of presses by button with counts and %; horizontal bar of average dwell per button |
-| 3. Activity over time | Stacked bar chart of presses per interval (15 min default, auto-scaled to the range), one colour per button |
+| 1. Summary | Session name, date/time range, total presses, total visits, average dwell, miss taps, number of buttons, onward nav taps (when any), thumbnail of home slide; a compact "Slide views" table (arrivals per slide) when the deck has any onward nav taps |
+| 2. Button share | Donut of presses by button with counts and %; horizontal bar of average dwell per button |
+| 3. Activity over time | Stacked bar chart of presses per interval, one colour per button. The interval is the finest of 5, 15, 30, 60, 120, 240 min or 1 day that keeps the chart to 48 bars or fewer |
 | 4. Return behaviour | Split of returns by Home button, tap and timeout; share of visits ending by timeout per button |
 | 5. Hour-by-day (multi-day only) | Heatmap of presses by hour and day |
 
-Button colours are consistent across every chart. Charts are drawn on-device to canvas and embedded as images in the PDF. Every page has a footer: `GGPad · <session name> · page n/N · generated <time>`.
+If the scope has no events, the report is a single Summary page reading "No interactions recorded." Button colours are consistent across every chart. Charts are drawn on-device to canvas and embedded as images in the PDF. Every page has a footer: `GGPad · <session name> · page n/N · generated <time>`.
 
 ## Non-functional requirements
 
@@ -234,7 +240,7 @@ Button colours are consistent across every chart. Charts are drawn on-device to 
 | Tap to slide change | Under 150 ms |
 | Deck parse and render at setup | Under 10 s for a 20-slide, 50 MB deck |
 | Maximum deck size | 100 MB |
-| Unattended run time | 12 hours continuous, no memory growth (verified by soak test) |
+| Unattended run time | 12 hours continuous, no memory growth (verified by a manual soak test on a device; there is no automated soak test) |
 | Log capacity | 100,000 events without slowdown |
 | Data durability | No event lost on app kill, crash or power loss after the write completes |
 | Privacy | No personal data collected; nothing leaves the device except admin-initiated exports |
@@ -256,6 +262,6 @@ Button colours are consistent across every chart. Charts are drawn on-device to 
 - [ ] Is there ever more than one iPad at the same stand, and should reports combine them?
 - [ ] Do destination slides need video (the most common ask for v2)?
 - [ ] Should the home slide have an attract loop or idle animation to draw people in?
-- [ ] Branding on the PDF report: agency, client, or neutral?
+- [ ] Branding on the PDF report: agency, client, or neutral? (Today the admin UI and template are Emota-branded; the PDF is neutral apart from the GGPad footer and a blackberry heatmap.)
 - [ ] Should one iPad hold several decks and switch between them, or one deck at a time?
 - [ ] Pharma use: any ABPI or data-retention constraints on logging, even anonymous taps?

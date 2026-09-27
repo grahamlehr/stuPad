@@ -2,6 +2,8 @@
 
 Offline iPad PWA: loads a structured .pptx from the Files app, renders it in the browser, runs it as an unattended touch kiosk, logs every tap to IndexedDB, and exports CSV/PDF reports via the iOS share sheet.
 
+The repo, IndexedDB database and console prefixes are `stuPad`; the product users see is **GGPad** (page title, PWA manifest, Setup header, PDF footer, template deck), with the Emota brand on the admin UI.
+
 - Requirements: `docs/SPEC.md` (source of truth). How it works and a codebase tour: `docs/ARCHITECTURE.md`. Module APIs and ownership: `docs/PLAN.md`.
 - Keep the docs in step with the code: a behaviour change updates SPEC, a module API change updates PLAN, a structural change updates ARCHITECTURE (and the README map if a directory changes).
 - Shared contracts: `src/types.ts`. Every module depends on it — make additive changes only, and update all consumers in the same change.
@@ -15,19 +17,23 @@ npm run typecheck
 npm run build      # typecheck + production build to dist/
 npm run fixtures   # regenerate tests/fixtures/*.pptx with pptxgenjs (public/template.pptx is edited by hand, not generated)
 npm run fonts      # re-download public/fonts and regenerate src/render/font-faces.ts (generated: don't hand-edit)
+node scripts/make-icons.mjs  # regenerate public/icons/*.png (no npm script)
 ```
 
 ## Layout
 
 | Dir | What |
 | --- | --- |
-| `src/pptx/` | JSZip + DOMParser PPTX parser → `Deck`; button/home-link detection; validation `Issue`s |
+| `src/pptx/` | JSZip + DOMParser PPTX parser → `Deck`; button, Home, nav and back-link detection; validation `Issue`s |
 | `src/render/` | `Deck` → DOM; `SlideStage` (letterboxed, fixed 1920-wide slide px canvas), thumbnails, raster fallback |
 | `src/store/` | IndexedDB (`idb`): deck, config, kiosk state, append-only event log |
-| `src/kiosk/` | Kiosk runtime: tap handling, secret exit sequence, debounce, timeout, wake lock |
+| `src/kiosk/` | Kiosk runtime: tap handling, secret exit sequence, debounce, timeout, wake lock; `glow.ts` button glow |
 | `src/report/` | Stats, CSV, jsPDF report with hand-drawn canvas charts, share-sheet export |
-| `src/ui/`, `src/main.ts` | Setup screen, admin panel, PIN pad, routing, resume-into-kiosk on launch |
+| `src/ui/`, `src/main.ts` | Setup screen, admin panel, PIN pad, Clear previous data dialog, routing, resume-into-kiosk on launch |
 | `src/types.ts`, `src/util.ts` | Shared contracts; `isoLocal()` and `uuid()` |
+| `src/styles.css` | All styling: Emota `--em-` tokens mapped to semantic tokens, kiosk lock-down rules, glow keyframes |
+| `public/` | `template.pptx` (hand-edited in PowerPoint), `fonts/` and `icons/` (generated), Emota logos |
+| `docs/` | SPEC, ARCHITECTURE, PLAN; `docs/brand/` holds the Emota brand CSS and cheat sheet the admin UI follows |
 | `scripts/` | `make-fixtures.mjs` (test fixture decks), `make-icons.mjs`, `make-fonts.mjs` |
 | `tests/` | Mirrors `src/`; fixtures in `tests/fixtures/` are generated, not hand-edited |
 
@@ -38,7 +44,7 @@ npm run fonts      # re-download public/fonts and regenerate src/render/font-fac
 - **Log durability:** `appendEvent` resolves only after the IndexedDB transaction completes. Never use `localStorage` for data. Events are append-only; the only deletions are `clearEvents` and `clearAllData` ("Clear previous data"), and each is itself logged.
 - **Geometry:** all deck coordinates are slide px (slide width = `SLIDE_W` = 1920). Convert EMU in the parser only; convert screen coordinates via `SlideStage.toSlide()` only.
 - **Timestamps:** use `isoLocal()` from `src/util.ts` (ISO 8601 with local offset). Compare instants, not strings.
-- **Kiosk input:** the secret sequence is checked before any other tap handling; corner taps never trigger buttons. Debounced taps are not logged.
+- **Kiosk input:** the secret sequence is checked before any other tap handling. Taps that continue or complete a sequence are consumed and never trigger buttons; the first corner tap of a sequence is handled normally so corner buttons still work. Debounced taps are not logged.
 - **Base path:** the app is served from a sub-path on GitHub Pages (`/stuPad/`). Never hard-code `/` URLs: use `import.meta.env.BASE_URL` in code (e.g. for `template.pptx`) and `%BASE_URL%` in `index.html`.
 - **Privacy:** no personal data; nothing leaves the device except admin-initiated exports.
 
