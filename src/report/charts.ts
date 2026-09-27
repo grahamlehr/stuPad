@@ -22,6 +22,9 @@ export interface ActivityChartBucket {
   label: string;
   /** button_id -> press count for this bucket */
   counts: Record<string, number>;
+  /** ReportStats.ActivityBucket.attractMs: ms of this bucket spent in an attract period, clipped
+   * to the bucket; 0 (or omitted) draws no band. See `drawActivityChart`'s "attract band" doc. */
+  attractMs?: number;
 }
 
 export interface ActivityChartSeries {
@@ -33,6 +36,10 @@ export interface ActivityChartSeries {
 export interface ActivityChartData {
   buckets: ActivityChartBucket[];
   series: ActivityChartSeries[];
+  /** ms per bucket (ReportStats.bucketMinutes * 60_000; every bucket is the same width). Needed
+   * to scale each bucket's attract band by attractMs / bucketMs; omit when no bucket has
+   * attractMs and no band is drawn. */
+  bucketMs?: number;
 }
 
 export interface HeatmapChartData {
@@ -270,6 +277,15 @@ export function drawDwellBarChart(
 /** Bars never grow wider than this even when a single bucket spans the whole plot. */
 const MAX_ACTIVITY_BAR_W = 140;
 
+/** Emota blackberry, as an rgb() triple, used at partial opacity for the attract band below. */
+const ATTRACT_BAND_COLOR_RGB = '42, 3, 76';
+/** Opacity of the attract band when a bucket is 100% attract time; scaled down from there by
+ * attractMs / bucketMs, so a bucket only briefly in attract mode reads as barely shaded. */
+const ATTRACT_BAND_MAX_ALPHA = 0.22;
+/** Solid approximation of the band at its max opacity over white, for the PDF legend swatch
+ * (report/pdf.ts): jsPDF's `rect('F')` fill has no alpha channel. */
+export const ATTRACT_BAND_LEGEND_COLOR = '#d0c8d8';
+
 export function drawActivityChart(
   ctx: CanvasRenderingContext2D | null,
   width: number,
@@ -279,7 +295,7 @@ export function drawActivityChart(
 ): void {
   if (!ctx) return;
   clearBg(ctx, width, height);
-  const { buckets, series } = data;
+  const { buckets, series, bucketMs } = data;
 
   const marginL = Math.max(40, 30 * fontScale);
   const marginB = Math.max(46, 38 * fontScale);
@@ -321,6 +337,16 @@ export function drawActivityChart(
   const labelEvery = Math.max(1, Math.ceil(buckets.length / 12));
 
   buckets.forEach((b, i) => {
+    // Attract band: a light shaded band spanning the bucket's full plot height, its opacity
+    // scaled by how much of the bucket's own span was spent in an attract period, so a bucket
+    // only briefly in attract mode reads as barely shaded and a fully-attract bucket reads
+    // clearly (see ATTRACT_BAND_MAX_ALPHA). Drawn behind the bars.
+    if (bucketMs && b.attractMs && b.attractMs > 0) {
+      const alpha = Math.min(1, b.attractMs / bucketMs) * ATTRACT_BAND_MAX_ALPHA;
+      ctx.fillStyle = `rgba(${ATTRACT_BAND_COLOR_RGB}, ${alpha.toFixed(3)})`;
+      ctx.fillRect(marginL + i * slotW, marginT, slotW, plotH);
+    }
+
     const x = marginL + i * slotW + (slotW - barW) / 2;
     let yTop = marginT + plotH;
     for (const sr of series) {
@@ -349,6 +375,131 @@ export function drawActivityChart(
   ctx.moveTo(marginL, marginT + plotH);
   ctx.lineTo(marginL + plotW, marginT + plotH);
   ctx.stroke();
+}
+
+export interface UptimeStripSegment {
+  /** ISO instant (local-offset, see util.isoLocal) */
+  from: string;
+  to: string;
+}
+
+/** A running span for the strip; see `ReportStats.uptime.spans` / `UptimeSpan.monitored`. */
+export interface UptimeStripSpan extends UptimeStripSegment {
+  /** false for a span with no heartbeat at all (an older log, or a span shorter than one tick) */
+  monitored: boolean;
+}
+
+export interface UptimeStripData {
+  /**
+   * Epoch-ms bounds of the time axis. Must be the same `startMs`/`endMs` the paired
+   * `drawActivityChart` call above it derives from its own buckets, so the two images'
+   * horizontal axes agree once both are placed at the same width in the PDF.
+   */
+  startMs: number;
+  endMs: number;
+  /** running spans (ReportStats.uptime.spans): monitored ones drawn green, unmonitored ones neutral grey */
+  spans: UptimeStripSpan[];
+  /** downtime gaps inside monitored spans (ReportStats.uptime.gaps), drawn over the green in red */
+  gaps: UptimeStripSegment[];
+}
+
+const UPTIME_RUNNING_COLOR = '#3F9142'; // muted green
+const UPTIME_DOWN_COLOR = '#B24C43'; // muted red
+const UPTIME_STOPPED_COLOR = '#EDEDED'; // light grey: outside any running span
+const UPTIME_UNMONITORED_COLOR = '#A6A6A6'; // neutral mid grey: a span with no heartbeat data
+
+function parseMsOrNaN(ts: string): number {
+  return Date.parse(ts);
+}
+
+function clampMs(ms: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, ms));
+}
+
+/**
+ * A thin up/down strip spanning the same time axis as the activity chart above it: green
+ * for a monitored running span, a muted red for a downtime gap inside one (drawn over the
+ * green), neutral grey for a span with no heartbeat data at all (an older log, see
+ * `UptimeStripSpan.monitored`), and light grey everywhere else (the kiosk wasn't running:
+ * Setup, or between sessions). See `UptimeStripData` for how its axis is kept in sync with
+ * `drawActivityChart`'s.
+ */
+export function drawUptimeStrip(
+  ctx: CanvasRenderingContext2D | null,
+  width: number,
+  height: number,
+  data: UptimeStripData,
+  fontScale = 1,
+): void {
+  if (!ctx) return;
+  clearBg(ctx, width, height);
+  const { startMs, endMs, spans, gaps } = data;
+
+  // Same formula as drawActivityChart's marginL/marginR: passing the same fontScale keeps
+  // the two charts' plot areas (and so their time axes) pixel-aligned once placed.
+  const marginL = Math.max(40, 30 * fontScale);
+  const marginR = 12;
+  const plotW = Math.max(1, width - marginL - marginR);
+
+  const legendH = Math.max(18, 16 * fontScale);
+  const stripTop = 4;
+  const stripH = Math.max(8, height - legendH - stripTop - 4);
+
+  const durationMs = Math.max(1, endMs - startMs);
+  const xOf = (ms: number): number => marginL + ((clampMs(ms, startMs, endMs) - startMs) / durationMs) * plotW;
+
+  ctx.fillStyle = UPTIME_STOPPED_COLOR;
+  ctx.fillRect(marginL, stripTop, plotW, stripH);
+
+  let hasUnmonitored = false;
+  for (const s of spans) {
+    const fromMs = parseMsOrNaN(s.from);
+    const toMs = parseMsOrNaN(s.to);
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) continue;
+    if (!s.monitored) hasUnmonitored = true;
+    ctx.fillStyle = s.monitored ? UPTIME_RUNNING_COLOR : UPTIME_UNMONITORED_COLOR;
+    const x1 = xOf(fromMs);
+    const x2 = xOf(toMs);
+    ctx.fillRect(x1, stripTop, Math.max(1, x2 - x1), stripH);
+  }
+
+  ctx.fillStyle = UPTIME_DOWN_COLOR;
+  for (const g of gaps) {
+    const fromMs = parseMsOrNaN(g.from);
+    const toMs = parseMsOrNaN(g.to);
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) continue;
+    const x1 = xOf(fromMs);
+    const x2 = xOf(toMs);
+    ctx.fillRect(x1, stripTop, Math.max(1, x2 - x1), stripH);
+  }
+
+  ctx.strokeStyle = AXIS_COLOR;
+  ctx.strokeRect(marginL, stripTop, plotW, stripH);
+
+  // legend: swatches with labels, left-aligned under the strip. "No heartbeat data" only
+  // appears when the scope actually has an unmonitored span, so a fully modern log's strip
+  // isn't cluttered with a legend entry that never applies to it.
+  const legendY = stripTop + stripH + legendH / 2;
+  const sw = Math.max(9, 10 * fontScale);
+  ctx.font = scaledFont(11, fontScale);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  let lx = marginL;
+  const items: Array<[string, string]> = [
+    [UPTIME_RUNNING_COLOR, 'Running'],
+    [UPTIME_DOWN_COLOR, 'Down'],
+    [UPTIME_STOPPED_COLOR, 'Stopped'],
+    ...(hasUnmonitored ? ([[UPTIME_UNMONITORED_COLOR, 'No heartbeat data']] as Array<[string, string]>) : []),
+  ];
+  for (const [color, label] of items) {
+    ctx.fillStyle = color;
+    ctx.strokeStyle = AXIS_COLOR;
+    ctx.fillRect(lx, legendY - sw / 2, sw, sw);
+    ctx.strokeRect(lx, legendY - sw / 2, sw, sw);
+    ctx.fillStyle = MUTED_COLOR;
+    ctx.fillText(label, lx + sw + 6, legendY);
+    lx += sw + 6 + ctx.measureText(label).width + 18;
+  }
 }
 
 /** Bar chart for a small set of named values (used for return-method split). */

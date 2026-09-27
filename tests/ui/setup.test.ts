@@ -1,10 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { SetupScreen } from '../../src/ui/setup';
 import * as render from '../../src/render';
 import * as store from '../../src/store';
 import { stubObjectUrl } from '../render/setup-url';
 import { deck, slide } from '../render/helpers';
 import { defaultConfig } from '../../src/types';
+
+const FIXTURES = path.resolve(__dirname, '../fixtures');
+
+async function loadFixtureFile(name: string): Promise<File> {
+  const buf = await fs.readFile(path.join(FIXTURES, name));
+  return new File([buf], name, {
+    type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  });
+}
 
 beforeEach(() => {
   stubObjectUrl();
@@ -141,6 +152,16 @@ describe('SetupScreen: typing in Configure text fields', () => {
     }
   });
 
+  it('keeps the focused device-name input', () => {
+    const { container, cleanup } = mount();
+    const deviceInput = container.querySelector('[data-step="configure"] input[placeholder="e.g. Stand A"]') as HTMLInputElement;
+    deviceInput.focus();
+    type(deviceInput, 'Stand C');
+    expect(deviceInput.isConnected).toBe(true);
+    expect(document.activeElement).toBe(deviceInput);
+    cleanup();
+  });
+
   it('does not tear down the live preview while typing', async () => {
     const { container, cleanup } = mount();
     await flushMicrotasks();
@@ -221,6 +242,61 @@ describe('SetupScreen: clear previous data', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('SetupScreen: device name field', () => {
+  function deviceNameInput(container: HTMLElement): HTMLInputElement {
+    return container.querySelector('[data-step="configure"] input[placeholder="e.g. Stand A"]') as HTMLInputElement;
+  }
+
+  it('shows the stored device name and saves an edit', () => {
+    vi.useFakeTimers();
+    try {
+      const saveConfig = vi.spyOn(store, 'saveConfig').mockResolvedValue();
+      const container = document.createElement('div');
+      const initialConfig = { ...defaultConfig('deck.pptx'), deviceName: 'Stand A' };
+      const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+      expect(deviceNameInput(container).value).toBe('Stand A');
+
+      deviceNameInput(container).value = 'Stand B';
+      deviceNameInput(container).dispatchEvent(new Event('input'));
+      vi.advanceTimersByTime(400);
+
+      expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ deviceName: 'Stand B' }));
+      screen.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is empty by default', () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+    expect(deviceNameInput(container).value).toBe('');
+    screen.destroy();
+  });
+
+  it('carries the device name over when loading a new deck, unlike every other setting', async () => {
+    vi.spyOn(store, 'saveDeck').mockResolvedValue();
+    vi.spyOn(store, 'saveConfig').mockResolvedValue();
+    const container = document.createElement('div');
+    const initialConfig = { ...defaultConfig('deck.pptx'), deviceName: 'Stand A', sessionName: 'Old session' };
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+    const file = await loadFixtureFile('good.pptx');
+    // loadFile is private; called directly (as the file input's onchange does) so the test
+    // can await its completion instead of racing real zip-parsing microtasks via a DOM event.
+    await (screen as unknown as { loadFile: (f: File) => Promise<void> }).loadFile(file);
+
+    // Every other setting resets to defaultConfig(fileName): session name changes...
+    const sessionNameInput = container.querySelector('[data-step="configure"] input[type="text"]') as HTMLInputElement;
+    expect(sessionNameInput.value).not.toBe('Old session');
+    // ...but the device name, which describes the iPad rather than the deck, survives.
+    expect(deviceNameInput(container).value).toBe('Stand A');
+
+    screen.destroy();
   });
 });
 
@@ -362,5 +438,85 @@ describe('SetupScreen: button glow settings', () => {
     expect(destroySpy).not.toHaveBeenCalled();
     screen.destroy();
     container.remove();
+  });
+});
+
+describe('SetupScreen: attract loop settings', () => {
+  it('shows only the on/off switch while attract is off (the default)', () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+    expect(container.querySelector('.attract-fields input[type="checkbox"]')).toBeTruthy();
+    expect(container.querySelector('.attract-slide-grid')).toBeNull();
+    screen.destroy();
+  });
+
+  it('shows idle time, mode and a checkbox per other slide in cycle mode when on', () => {
+    const container = document.createElement('div');
+    const initialConfig = {
+      ...defaultConfig('deck.pptx'),
+      attract: { enabled: true, idleSec: 60, mode: 'cycle' as const, slides: [], slideSec: 6 },
+    };
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+    // makeDeck() has slides 1 and 2; Home (1) is never a checkbox, so exactly one is shown.
+    const checks = container.querySelectorAll('.attract-slide-grid .attract-slide-check');
+    expect(checks).toHaveLength(1);
+    screen.destroy();
+  });
+
+  it('hides the slide checkboxes in pulse mode', () => {
+    const container = document.createElement('div');
+    const initialConfig = {
+      ...defaultConfig('deck.pptx'),
+      attract: { enabled: true, idleSec: 60, mode: 'pulse' as const, slides: [], slideSec: 6 },
+    };
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+    expect(container.querySelector('.attract-slide-grid')).toBeNull();
+    screen.destroy();
+  });
+
+  it('checking a slide saves it into config.attract.slides', () => {
+    vi.useFakeTimers();
+    try {
+      const saveConfig = vi.spyOn(store, 'saveConfig').mockResolvedValue();
+      const container = document.createElement('div');
+      const initialConfig = {
+        ...defaultConfig('deck.pptx'),
+        attract: { enabled: true, idleSec: 60, mode: 'cycle' as const, slides: [], slideSec: 6 },
+      };
+      const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+      const checkbox = container.querySelector<HTMLInputElement>('.attract-slide-check input[type="checkbox"]')!;
+      checkbox.checked = true;
+      checkbox.dispatchEvent(new Event('change'));
+      vi.advanceTimersByTime(400);
+
+      expect(saveConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ attract: expect.objectContaining({ slides: [2] }) }),
+      );
+      screen.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('loading a new deck resets attract to the default, unlike deviceName', async () => {
+    vi.spyOn(store, 'saveDeck').mockResolvedValue();
+    vi.spyOn(store, 'saveConfig').mockResolvedValue();
+    const container = document.createElement('div');
+    const initialConfig = {
+      ...defaultConfig('deck.pptx'),
+      deviceName: 'Stand A',
+      attract: { enabled: true, idleSec: 30, mode: 'pulse' as const, slides: [2], slideSec: 4 },
+    };
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), initialConfig, onGoLive: vi.fn(), onClearAll: vi.fn() });
+
+    const file = await loadFixtureFile('good.pptx');
+    await (screen as unknown as { loadFile: (f: File) => Promise<void> }).loadFile(file);
+
+    // Attract is deck-specific, so it resets to off, unlike deviceName (which survives).
+    const attractToggle = container.querySelector<HTMLInputElement>('.attract-fields input[type="checkbox"]')!;
+    expect(attractToggle.checked).toBe(false);
+    screen.destroy();
   });
 });

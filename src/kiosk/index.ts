@@ -9,7 +9,7 @@
  * without a DOM or fake timers.
  */
 import { SlideStage, preloadDeckFonts } from '../render';
-import type { Deck, ButtonDef, NavLinkDef, KioskConfig, LogEvent, Rect, SecretPattern } from '../types';
+import type { Deck, ButtonDef, NavLinkDef, KioskConfig, GlowConfig, LogEvent, Rect, SecretPattern } from '../types';
 import { uuid } from '../util';
 import { applyGlowStyle, createGlow, createGlowLayer } from './glow';
 
@@ -185,7 +185,7 @@ export interface KioskControllerOpts {
   onAdminRequested: () => void;
 }
 
-type Mode = 'home' | 'destination';
+type Mode = 'home' | 'destination' | 'attract';
 
 const CORNER_FRACTION = 0.12;
 const FALLBACK_HOME_SIZE = 88; // slide px, >= 44pt per SPEC accessibility target
@@ -195,6 +195,15 @@ const PRESS_FEEDBACK_MS = 220;
  * looping between two slides with explicit links can't grow it without bound. */
 const MAX_VISIT_PATH = 100;
 const IDLE_WARNING_MS = 5000;
+
+/**
+ * Crossfade length for every attract-cycle step, fixed regardless of `config.transitionMs`
+ * (SPEC/ROADMAP "Attract loop"). Exported so tests and callers don't need to hard-code it.
+ */
+export const ATTRACT_CROSSFADE_MS = 1000;
+/** Pulse mode's glow is at least this intense, even if `config.glow.intensity` is lower or
+ * the glow is off entirely (see `KioskController.ensureAttractPulseElements`). */
+const ATTRACT_PULSE_MIN_INTENSITY = 8;
 
 export class KioskController {
   private readonly root: HTMLElement;
@@ -227,6 +236,21 @@ export class KioskController {
   private idleWarningTimer: ReturnType<typeof setTimeout> | undefined;
   private idleCountdownInterval: ReturnType<typeof setInterval> | undefined;
   private pressFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Armed whenever the kiosk is on Home and idle (see `armAttractIdleTimer`); fires `startAttract`. */
+  private attractIdleTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The single setTimeout chain driving cycle mode; never more than one pending at a time. */
+  private attractCycleTimer: ReturnType<typeof setTimeout> | undefined;
+  /** `now()` when the current attract period began, for attract_end's dwell_ms. */
+  private attractStartedAt = 0;
+  /** Cycle mode's slide list for the current attract period (see `computeAttractCycleSlides`). */
+  private attractCycleSlides: number[] = [];
+  /** Index into `attractCycleSlides` of the slide currently shown. */
+  private attractCycleIndex = 0;
+  /** Pulse mode's "Tap to start" overlay + strong glow layer, built once lazily and afterwards
+   * only shown/hidden via the `kiosk-attract-pulse` class on `root`; goes with the stage's
+   * overlay on `destroy()`. */
+  private attractPulseEl: HTMLElement | null = null;
 
   private fallbackHomeBounds: Rect | null = null;
   private fallbackHomeEl: HTMLElement | null = null;
@@ -272,6 +296,9 @@ export class KioskController {
     this.mode = 'home';
     this.destSlide = null;
     this.visitPath = [];
+    this.attractCycleSlides = [];
+    this.attractCycleIndex = 0;
+    this.attractPulseEl = null;
     this.stage = new SlideStage(this.root, this.deck, { useRaster: this.config.useRaster });
     await preloadDeckFonts(this.deck.fonts);
     await this.stage.show(1, { type: 'none', ms: 0 });
@@ -279,12 +306,16 @@ export class KioskController {
     this.bindInput();
     await this.reacquireWakeLock();
     document.addEventListener('visibilitychange', this.onVisibilityChange);
+    this.armAttractIdleTimer();
   }
 
   stop(): void {
     this.unbindInput();
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.clearDestinationTimers();
+    this.clearAttractIdleTimer();
+    this.clearAttractCycleTimer();
+    this.stopAttractPulse();
     if (this.pressFeedbackTimer !== undefined) {
       clearTimeout(this.pressFeedbackTimer);
       this.pressFeedbackTimer = undefined;
@@ -295,6 +326,7 @@ export class KioskController {
       void wl.release().catch(() => {});
     }
     this.glowLayers.clear(); // their elements go with the stage's overlay
+    this.attractPulseEl = null; // same: goes with the stage's overlay
     this.stage?.destroy();
     this.stage = null;
   }
@@ -343,18 +375,28 @@ export class KioskController {
     }
     if (secret === 'continued') {
       if (this.mode === 'destination') this.resetDestinationTimer();
+      // A corner tap that continues the sequence on Home is still activity: it must re-arm
+      // the idle timer so an admin mid-sequence doesn't trigger the attract loop underneath
+      // them (SPEC "Kiosk mode behaviour").
+      else if (this.mode === 'home') this.armAttractIdleTimer();
       return;
     }
 
     // Debounce: repeat taps within the window are ignored entirely (not logged, no
-    // state change), per SPEC.
+    // state change), per SPEC. This is also what makes the attract-wake tap behave like any
+    // other accepted tap: a quick second tap is debounced, and the next tap past the window
+    // is a normal Home tap (the mode has already flipped back to 'home' by then).
     if (now - this.lastAcceptedTapAt < this.config.debounceMs) return;
     this.lastAcceptedTapAt = now;
 
     if (this.mode === 'home') {
       this.handleHomeTap(at.px, at.py, at.xPct, at.yPct);
-    } else {
+    } else if (this.mode === 'destination') {
       this.handleDestinationTap(at.px, at.py, now);
+    } else {
+      // Attract mode: the tap only wakes the kiosk, never a button press, even when the
+      // loop happens to be showing Home right now (decided, see ROADMAP "Attract loop").
+      this.wakeFromAttract(now);
     }
   }
 
@@ -366,9 +408,15 @@ export class KioskController {
     const button = this.hitTestButton(px, py);
     if (!button) {
       this.log({ event: 'miss_tap', slide_from: 1, x: round1(xPct), y: round1(yPct) });
+      // A miss tap is still activity: re-arm the idle timer so the visitor gets a fresh
+      // idleSec before the attract loop kicks in.
+      this.armAttractIdleTimer();
       return;
     }
 
+    // A button press leaves Home, so no attract idle timer should be left ticking underneath
+    // the destination visit.
+    this.clearAttractIdleTimer();
     this.showPressFeedback(button.bounds);
 
     const label = this.config.buttonLabels[button.id] ?? button.defaultLabel;
@@ -512,6 +560,8 @@ export class KioskController {
     this.clearIdleCountdown();
     void this.stage?.show(1, { type: this.config.transition, ms: this.config.transitionMs });
     this.showGlow(1);
+    // Back on Home and idle: a fresh idleSec starts counting toward the attract loop.
+    this.armAttractIdleTimer();
   }
 
   // ------------------------------------------------------------ timeout
@@ -557,6 +607,156 @@ export class KioskController {
       this.idleCountdownEl.remove();
       this.idleCountdownEl = null;
     }
+  }
+
+  // -------------------------------------------------------- attract loop
+
+  /**
+   * Arms (or re-arms) the timer that starts the attract loop after `config.attract.idleSec`
+   * of no accepted taps on Home. A no-op when the loop is off or the kiosk isn't on Home, so
+   * every call site can call this unconditionally rather than checking first (SPEC "Kiosk
+   * mode behaviour": armed after `start()`, after every accepted Home tap that doesn't leave
+   * Home, after every return to Home, and after waking from attract).
+   */
+  private armAttractIdleTimer(): void {
+    this.clearAttractIdleTimer();
+    if (!this.config.attract.enabled || this.mode !== 'home') return;
+    this.attractIdleTimer = setTimeout(() => this.startAttract(), this.config.attract.idleSec * 1000);
+  }
+
+  private clearAttractIdleTimer(): void {
+    if (this.attractIdleTimer !== undefined) {
+      clearTimeout(this.attractIdleTimer);
+      this.attractIdleTimer = undefined;
+    }
+  }
+
+  /** Cycle mode's slide list: Home (always first), then `config.attract.slides` filtered to
+   * slide numbers that actually exist in the deck and are not Home itself, deduplicated and
+   * in ascending slide order. */
+  private computeAttractCycleSlides(): number[] {
+    const deckSlideNumbers = new Set(this.deck.slides.map((s) => s.index));
+    const extra = Array.from(new Set(this.config.attract.slides))
+      .filter((n) => n > 1 && deckSlideNumbers.has(n))
+      .sort((a, b) => a - b);
+    return [1, ...extra];
+  }
+
+  private startAttract(): void {
+    if (!this.config.attract.enabled || this.mode !== 'home') return;
+    this.clearAttractIdleTimer();
+    this.mode = 'attract';
+    this.attractStartedAt = this.now();
+    this.log({ event: 'attract_start' });
+
+    const cycleSlides = this.computeAttractCycleSlides();
+    // Cycling only one slide (Home, because config.attract.slides has nothing valid to add)
+    // has nothing to crossfade to, so it behaves like pulse mode instead (documented in SPEC).
+    if (this.config.attract.mode === 'pulse' || cycleSlides.length <= 1) {
+      this.startAttractPulse();
+    } else {
+      this.startAttractCycle(cycleSlides);
+    }
+  }
+
+  private startAttractCycle(slides: number[]): void {
+    this.attractCycleSlides = slides;
+    this.attractCycleIndex = 0; // slides[0] is Home, already showing
+    this.scheduleAttractCycleStep();
+  }
+
+  private scheduleAttractCycleStep(): void {
+    this.clearAttractCycleTimer();
+    this.attractCycleTimer = setTimeout(() => this.advanceAttractCycle(), this.config.attract.slideSec * 1000);
+  }
+
+  /** One step of the cycle: crossfade to the next slide (wrapping back to Home), then
+   * schedule the next step. A single setTimeout chain, per the 12-hour-safety rule: only one
+   * pending timer at a time, and it's re-created (not left running) on every step. */
+  private advanceAttractCycle(): void {
+    const slides = this.attractCycleSlides;
+    if (slides.length === 0) return;
+    this.attractCycleIndex = (this.attractCycleIndex + 1) % slides.length;
+    const target = slides[this.attractCycleIndex];
+    void this.stage?.show(target, { type: 'fade', ms: ATTRACT_CROSSFADE_MS });
+    this.updateAttractCycleGlow(target);
+    this.scheduleAttractCycleStep();
+  }
+
+  /** Nothing on a non-Home slide is tappable in attract mode, so its glow (if any) stays
+   * hidden; Home's own glow (if the setting is on) plays normally when the cycle lands there. */
+  private updateAttractCycleGlow(target: number): void {
+    if (target === 1) {
+      this.showGlow(1, ATTRACT_CROSSFADE_MS);
+    } else {
+      for (const layer of this.glowLayers.values()) layer.style.display = 'none';
+    }
+  }
+
+  private clearAttractCycleTimer(): void {
+    if (this.attractCycleTimer !== undefined) {
+      clearTimeout(this.attractCycleTimer);
+      this.attractCycleTimer = undefined;
+    }
+  }
+
+  private startAttractPulse(): void {
+    this.ensureAttractPulseElements();
+    this.root.classList.add('kiosk-attract-pulse');
+  }
+
+  private stopAttractPulse(): void {
+    this.root.classList.remove('kiosk-attract-pulse');
+  }
+
+  /** Builds pulse mode's "Tap to start" overlay and stronger glow layer once, lazily; every
+   * later start/stop of pulse mode only toggles the `kiosk-attract-pulse` class on `root`
+   * (see `startAttractPulse`/`stopAttractPulse`), so a tap in pulse mode never rebuilds DOM. */
+  private ensureAttractPulseElements(): void {
+    if (this.attractPulseEl) return;
+    const overlay = this.stage?.overlay;
+    if (!overlay) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'kiosk-attract-pulse-layer';
+
+    // Reuses glow.ts with a stronger, always-visible GlowConfig, independent of whether the
+    // admin's own button glow is on (SPEC/ROADMAP "Attract loop").
+    const strongGlow: GlowConfig = {
+      enabled: true,
+      color: this.config.glow.color,
+      intensity: Math.max(this.config.glow.intensity, ATTRACT_PULSE_MIN_INTENSITY),
+      periodMs: this.config.glow.periodMs,
+    };
+    wrapper.appendChild(createGlowLayer(this.deck, 1, strongGlow));
+
+    const tap = document.createElement('div');
+    tap.className = 'kiosk-attract-tap';
+    tap.textContent = 'Tap to start';
+    wrapper.appendChild(tap);
+
+    overlay.appendChild(wrapper);
+    this.attractPulseEl = wrapper;
+  }
+
+  /** The first tap in attract mode: wakes the kiosk. Never presses a button, even when the
+   * loop happens to be showing Home right now (decided). Stops whichever sub-mode (cycle or
+   * pulse) was running, shows Home with the configured transition, logs `attract_end` with
+   * `dwell_ms`, and re-arms the idle timer for the next idle period. */
+  private wakeFromAttract(now: number): void {
+    this.clearAttractCycleTimer();
+    this.stopAttractPulse();
+    const dwellMs = Math.max(0, Math.round(now - this.attractStartedAt));
+
+    this.log({ event: 'attract_end', dwell_ms: dwellMs });
+
+    this.mode = 'home';
+    // Home may already be visible (pulse mode, or the cycle happened to be showing it); show()
+    // is a no-op in that case. If a cycle crossfade is mid-flight, SlideStage.show() settles it
+    // synchronously before starting this one, so there's never a stale half-transparent layer.
+    void this.stage?.show(1, { type: this.config.transition, ms: this.config.transitionMs });
+    this.showGlow(1);
+    this.armAttractIdleTimer();
   }
 
   // ------------------------------------------------------------- overlay

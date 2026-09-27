@@ -14,7 +14,7 @@
 import { openDB } from 'idb';
 import type { IDBPDatabase } from 'idb';
 import type { Deck, KioskConfig, KioskState, LogEvent, EventFilter } from '../types';
-import { defaultGlow } from '../types';
+import { defaultGlow, defaultAttract } from '../types';
 import { isoLocal } from '../util';
 
 const DB_NAME = 'stupad';
@@ -127,6 +127,10 @@ export async function loadConfig(): Promise<KioskConfig | undefined> {
   // A config saved before the glow setting existed won't have it; normalise here so every
   // other module can rely on it being present.
   if (cfg && !cfg.glow) cfg.glow = defaultGlow();
+  // Same shim for deviceName (added for the heartbeat/uptime feature): default to ''.
+  if (cfg && cfg.deviceName === undefined) cfg.deviceName = '';
+  // Same shim for attract (added for the attract loop feature): default to off.
+  if (cfg && !cfg.attract) cfg.attract = defaultAttract();
   return cfg;
 }
 

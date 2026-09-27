@@ -56,5 +56,18 @@ export function validateConfig(config: KioskConfig): string[] {
     }
   }
 
+  const { attract } = config;
+  if (attract.enabled) {
+    if (attract.idleSec < 15 || attract.idleSec > 600) {
+      errors.push('Attract loop idle time must be between 15 and 600 seconds.');
+    }
+    if (attract.slideSec < 3 || attract.slideSec > 60) {
+      errors.push('Attract loop seconds per slide must be between 3 and 60 seconds.');
+    }
+    if (attract.mode !== 'cycle' && attract.mode !== 'pulse') {
+      errors.push('Attract loop mode must be Cycle slides or Pulse on Home.');
+    }
+  }
+
   return errors;
 }

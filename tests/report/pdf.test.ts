@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { inflateSync } from 'node:zlib';
 import { buildPdf } from '../../src/report/pdf';
 import { defaultConfig, type Deck, type LogEvent } from '../../src/types';
 
@@ -67,6 +68,28 @@ async function countPdfPages(blob: Blob): Promise<number> {
   const text = Buffer.from(buf).toString('latin1');
   const matches = text.match(/\/Type\s*\/Page[^s]/g);
   return matches ? matches.length : 0;
+}
+
+/**
+ * jsPDF's `compress: true` (used by buildPdf, see its own comment) Flate-compresses every
+ * content stream, so literal text like a footer or a tile label never appears in the raw
+ * PDF bytes: it has to be inflated first. This concatenates every stream's inflated text
+ * operators so a test can assert a string appears somewhere in the rendered PDF.
+ */
+async function extractPdfText(blob: Blob): Promise<string> {
+  const buf = await blob.arrayBuffer();
+  const raw = Buffer.from(buf).toString('latin1');
+  const re = /stream\r?\n([\s\S]*?)endstream/g;
+  let out = '';
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw))) {
+    try {
+      out += inflateSync(Buffer.from(m[1], 'latin1')).toString('latin1');
+    } catch {
+      // not every "stream" block is Flate-compressed text (e.g. the embedded PNGs); skip those
+    }
+  }
+  return out;
 }
 
 describe('buildPdf', () => {
@@ -238,5 +261,70 @@ describe('buildPdf: exact page counts', () => {
     const blob = await buildPdf(events, deck, config);
     expect(await readHeader(blob)).toBe('%PDF');
     expect(await countPdfPages(blob)).toBe(5);
+  });
+});
+
+describe('buildPdf: uptime tile and device name', () => {
+  it('shows a rounded uptime % tile on Summary for a clean running span', async () => {
+    const deck = makeDeck(['b1']);
+    const config = defaultConfig('demo.pptx');
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', event: 'kiosk_start' },
+      { ts: '2026-10-14T09:15:00.000+00:00', session_id: 's1', event: 'heartbeat' },
+      { ts: '2026-10-14T09:30:00.000+00:00', session_id: 's1', event: 'heartbeat' },
+      { ts: '2026-10-14T09:45:00.000+00:00', session_id: 's1', event: 'kiosk_stop' },
+    ];
+    const blob = await buildPdf(events, deck, config);
+    const text = await extractPdfText(blob);
+    expect(text).toContain('Uptime');
+    expect(text).toContain('100%');
+  });
+
+  it('shows "n/a" for uptime when the log has events but no running span', async () => {
+    const deck = makeDeck(['b1']);
+    const config = defaultConfig('demo.pptx');
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', event: 'miss_tap', x: 10, y: 10 },
+    ];
+    const blob = await buildPdf(events, deck, config);
+    const text = await extractPdfText(blob);
+    expect(text).toContain('Uptime');
+    expect(text).toContain('n/a');
+  });
+
+  it('prints the device name next to the session name and in every page footer when set', async () => {
+    const deck = makeDeck(['b1']);
+    const config = { ...defaultConfig('demo.pptx'), sessionName: 'Launch day', deviceName: 'Stand A' };
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', visit_id: 'v1', event: 'button_press', button_id: 'b1', button_label: 'A' },
+      { ts: '2026-10-14T09:00:10.000+00:00', session_id: 's1', visit_id: 'v1', event: 'return_home', method: 'tap', dwell_ms: 10000 },
+    ];
+    const blob = await buildPdf(events, deck, config);
+    const text = await extractPdfText(blob);
+    // Summary header: "Launch day · Stand A"
+    expect(text).toContain('Launch day');
+    expect(text).toContain('Stand A');
+    // footer: "GGPad · Stand A · Launch day · page n/N · generated ..."
+    expect(text).toContain('GGPad');
+    expect(text).toMatch(/GGPad [^\n]*Stand A[^\n]*Launch day[^\n]*page/);
+  });
+
+  it('leaves Summary and the footer unchanged when device name is empty', async () => {
+    const deck = makeDeck(['b1']);
+    const config = { ...defaultConfig('demo.pptx'), sessionName: 'Launch day' };
+    expect(config.deviceName).toBe('');
+    const blob = await buildPdf([], deck, config);
+    const text = await extractPdfText(blob);
+    expect(text).toMatch(/GGPad [^\n]*Launch day[^\n]*page/);
+    // no stray double-separator from an empty device-name segment
+    expect(text).not.toMatch(/·\s*·/);
+  });
+
+  it('trims whitespace-only device names to empty (treated the same as unset)', async () => {
+    const deck = makeDeck(['b1']);
+    const config = { ...defaultConfig('demo.pptx'), sessionName: 'Launch day', deviceName: '   ' };
+    const blob = await buildPdf([], deck, config);
+    const text = await extractPdfText(blob);
+    expect(text).not.toMatch(/·\s*·/);
   });
 });

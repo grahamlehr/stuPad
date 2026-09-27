@@ -30,6 +30,14 @@ export interface ActivityBucket {
   /** button_id -> press count within [start, end) */
   counts: Record<string, number>;
   total: number;
+  /**
+   * Milliseconds of this bucket's own [start, end) span spent inside an attract period (see
+   * `computeStats`' attract-period reconstruction below), clipped to the bucket. 0 when the
+   * loop never ran, or never overlapped this bucket. Drawn as a shaded band in the Activity
+   * chart (`drawActivityChart`); kept as a single number per bucket (not raw periods) so
+   * memory stays flat regardless of event count.
+   */
+  attractMs: number;
 }
 
 /**
@@ -82,6 +90,76 @@ export const MISS_GRID_COLS = 48;
 /** Rows (y, 0..26) in the miss-tap grid; see `ReportStats.missGrid`. */
 export const MISS_GRID_ROWS = 27;
 
+/**
+ * A gap longer than this between two consecutive events inside a running span (see
+ * `UptimeStats`) counts as downtime. iOS suspends timers when the app is backgrounded or
+ * the screen locks, so a silence this long inside a span is exactly the "someone left the
+ * kiosk" / "it crashed" / "it lost power" signal a heartbeat is meant to catch.
+ */
+export const UPTIME_GAP_MS = 20 * 60_000;
+
+/** One continuous stretch of the kiosk actually running, see `UptimeStats`. */
+export interface UptimeSpan {
+  from: string;
+  to: string;
+  /**
+   * False when this span contains no `heartbeat` event at all: a log from before 1.5.0 (the
+   * release that added the heartbeat), or a new-build span shorter than one heartbeat tick
+   * (15 minutes). An unmonitored span's whole duration goes into `UptimeStats.unmonitoredMs`
+   * instead of `uptimeMs`/`downtimeMs`/`gaps`, since without any heartbeat there is nothing
+   * to measure a gap against; it is still drawn (as a neutral grey) in the PDF's uptime strip
+   * so it reads as "no data" rather than "fully down".
+   */
+  monitored: boolean;
+}
+
+/** A silence longer than `UPTIME_GAP_MS` between two consecutive events inside a *monitored* span. */
+export interface UptimeGap {
+  from: string;
+  to: string;
+}
+
+/**
+ * Uptime/downtime reconstructed from the event log, not from the heartbeat alone: any two
+ * consecutive events (heartbeats, taps, `app_resume`, ...) close enough together prove the
+ * kiosk was up for the time between them. Uptime is only ever measured for a span that has
+ * at least one `heartbeat`, i.e. a span logged by 1.5.0 or later (see `UptimeSpan.monitored`
+ * and `unmonitoredMs`); an older log's spans are counted as unmonitored, not as downtime.
+ *
+ * **Spans.** A running span opens at a `kiosk_start`; if no span is already open, any other
+ * event opens one too (an `app_resume`, a tap, a `heartbeat`, ...), since events are only
+ * ever logged while the kiosk is running, so an event arriving with no span open means the
+ * scope simply cut off the `kiosk_start` that would have opened it (a date-range export, or
+ * a session whose `kiosk_start` is out of scope). The one exception is `kiosk_stop`: with no
+ * span open it closes nothing and opens nothing. A span closes at the matching `kiosk_stop`.
+ * If the event log ends, or another `kiosk_start` arrives, while a span is still open, that
+ * span closes at its own last event (not at the new `kiosk_start`, which opens the next
+ * span). Time outside any span (kiosk stopped, admin in Setup) is neither up nor down: it's
+ * simply not counted.
+ *
+ * **Within a monitored span**, every consecutive pair of events is walked in order. A gap
+ * longer than `UPTIME_GAP_MS` (20 minutes) between them is downtime (`gaps`); every other
+ * gap is uptime. So `uptimeMs + downtimeMs` always equals the sum of every *monitored*
+ * span's own duration; an unmonitored span's duration is in `unmonitoredMs` instead. An
+ * `app_resume` that arrives after a long silence *inside* an already-open span (rather than
+ * opening a new one) is exactly how a kill/relaunch or a long backgrounding shows up: the
+ * gap immediately before it is recorded as down.
+ *
+ * Events with an unparseable `ts` are skipped entirely (they neither open/close a span nor
+ * take part in a gap calculation). Computed over whatever events are passed in, so a
+ * filtered scope (a date range, a single session) reports uptime for just that scope.
+ */
+export interface UptimeStats {
+  uptimeMs: number;
+  downtimeMs: number;
+  /** total duration of every unmonitored span (see `UptimeSpan.monitored`); never up or down */
+  unmonitoredMs: number;
+  /** silences longer than `UPTIME_GAP_MS` inside a monitored span, in chronological order */
+  gaps: UptimeGap[];
+  /** every running span found in the scope, monitored and not, in chronological order; drawn as the PDF's uptime strip */
+  spans: UptimeSpan[];
+}
+
 export interface ReportStats {
   /** session_id of the first event, or null for an empty log */
   sessionId: string | null;
@@ -127,6 +205,125 @@ export interface ReportStats {
   otherPaths: number;
   /** total path-tracked visits: sum of topPaths' counts plus otherPaths */
   totalPaths: number;
+  /** uptime/downtime reconstructed from the event log; see `UptimeStats` */
+  uptime: UptimeStats;
+  /** uptimeMs as a % of (uptimeMs + downtimeMs) over monitored spans only, 0..100; null when there are none */
+  uptimePct: number | null;
+  /** count of `attract_start` events (attract loop runs) in scope */
+  attractStarts: number;
+  /** count of `attract_end` events (loops ended by a wake tap, as opposed to kiosk_stop/kiosk_start/app_resume) in scope */
+  attractEnds: number;
+  /** attractEnds / attractStarts * 100, 0..100; null when attractStarts is 0. The "pull-in rate": of
+   * every attract loop that ran, the share a visitor actually walked up and tapped to end. */
+  attractPullInPct: number | null;
+}
+
+function emptyUptime(): UptimeStats {
+  return { uptimeMs: 0, downtimeMs: 0, unmonitoredMs: 0, gaps: [], spans: [] };
+}
+
+/**
+ * Reconstructs `UptimeStats` from a chronologically-sorted event list (see the doc comment
+ * on `UptimeStats` for the full semantics). Kept as its own small pass, separate from the
+ * main `computeStats` loop, since it needs to see events computeStats otherwise ignores
+ * (`kiosk_start`/`kiosk_stop`/`app_resume`/`heartbeat`) and its own state (the currently
+ * open span) doesn't fit naturally into that loop's per-button/per-visit accumulators.
+ *
+ * Each span's own up/down/gap numbers are accumulated locally (`spanUptimeMs` etc.) while
+ * the span is open, and only folded into the running totals once the span closes and its
+ * `monitored` flag (whether a `heartbeat` was ever seen in it) is known: a span that turns
+ * out unmonitored contributes its whole duration to `unmonitoredMs` instead, and its gaps
+ * (computed the same way, just in case, but meaningless without a heartbeat to trust) are
+ * discarded rather than reported as real downtime.
+ */
+function computeUptime(sorted: LogEvent[]): UptimeStats {
+  const gaps: UptimeGap[] = [];
+  const spans: UptimeSpan[] = [];
+  let uptimeMs = 0;
+  let downtimeMs = 0;
+  let unmonitoredMs = 0;
+
+  let openFrom: string | null = null;
+  let openFromMs = 0;
+  let lastTs: string | null = null;
+  let lastMs = 0;
+  let sawHeartbeat = false;
+  let spanUptimeMs = 0;
+  let spanDowntimeMs = 0;
+  let spanGaps: UptimeGap[] = [];
+
+  function openSpan(ts: string, ms: number): void {
+    openFrom = ts;
+    openFromMs = ms;
+    lastTs = ts;
+    lastMs = ms;
+    sawHeartbeat = false;
+    spanUptimeMs = 0;
+    spanDowntimeMs = 0;
+    spanGaps = [];
+  }
+
+  function closeSpan(): void {
+    if (openFrom === null || lastTs === null) return;
+    if (sawHeartbeat) {
+      spans.push({ from: openFrom, to: lastTs, monitored: true });
+      uptimeMs += spanUptimeMs;
+      downtimeMs += spanDowntimeMs;
+      for (const g of spanGaps) gaps.push(g);
+    } else {
+      spans.push({ from: openFrom, to: lastTs, monitored: false });
+      unmonitoredMs += lastMs - openFromMs;
+    }
+    openFrom = null;
+    lastTs = null;
+  }
+
+  for (const ev of sorted) {
+    const ms = parseTsOrNaN(ev.ts);
+    if (!Number.isFinite(ms)) continue; // unparseable ts: skip entirely, per SPEC
+
+    if (ev.event === 'kiosk_start') {
+      // A span already open when a new kiosk_start arrives closes at ITS OWN last event
+      // (not at this kiosk_start), then this kiosk_start opens the next span.
+      if (openFrom !== null) closeSpan();
+      openSpan(ev.ts, ms);
+      continue;
+    }
+
+    if (openFrom === null) {
+      // Events are only ever logged while the kiosk is running, so anything other than
+      // kiosk_start arriving with no span open means the scope cut off the kiosk_start
+      // that would have opened it: open the span here instead. kiosk_stop is the one
+      // exception, since a stop with nothing open closes nothing and starts nothing.
+      if (ev.event === 'kiosk_stop') continue;
+      openSpan(ev.ts, ms);
+      if (ev.event === 'heartbeat') sawHeartbeat = true;
+      continue;
+    }
+
+    if (ev.event === 'heartbeat') sawHeartbeat = true;
+
+    const gap = ms - lastMs;
+    if (gap > UPTIME_GAP_MS) {
+      spanGaps.push({ from: lastTs!, to: ev.ts });
+      spanDowntimeMs += gap;
+    } else if (gap > 0) {
+      spanUptimeMs += gap;
+    }
+    lastTs = ev.ts;
+    lastMs = ms;
+
+    if (ev.event === 'kiosk_stop') closeSpan();
+  }
+  // The log ends while a span is still open: it closes at its own last event.
+  closeSpan();
+
+  return { uptimeMs, downtimeMs, unmonitoredMs, gaps, spans };
+}
+
+function uptimePctOf(uptime: UptimeStats): number | null {
+  const total = uptime.uptimeMs + uptime.downtimeMs;
+  return total > 0 ? (uptime.uptimeMs / total) * 100 : null;
 }
 
 function emptyMethodCounts(): Record<ReturnMethod, number> {
@@ -235,6 +432,11 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       topPaths: [],
       otherPaths: 0,
       totalPaths: 0,
+      uptime: emptyUptime(),
+      uptimePct: null,
+      attractStarts: 0,
+      attractEnds: 0,
+      attractPullInPct: null,
     };
   }
 
@@ -278,6 +480,14 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
   let dwellCountAll = 0;
   let totalNavTaps = 0;
   const slideViewCounts = new Map<number, number>();
+
+  // ---- attract loop (feature F) ----
+  let attractStarts = 0;
+  let attractEnds = 0;
+  let openAttractFromMs: number | null = null;
+  // Closed periods only (not raw events), so memory stays flat regardless of event count;
+  // clipped into per-bucket attractMs below once bucketMs/startMs/numBuckets are known.
+  const attractPeriods: { fromMs: number; toMs: number }[] = [];
 
   // open visits: visit_id -> { buttonId, ts }
   const openVisits = new Map<string, { buttonId: string; ts: string }>();
@@ -348,7 +558,11 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
   const dayKeysSeen = new Set<string>();
 
   for (const ev of sorted) {
-    dayKeysSeen.add(dayKey(ev.ts));
+    // heartbeat is excluded here on purpose: it must extend firstTs/lastTs (and so the
+    // Activity chart's time axis and bucket width, see below) without ever being able to
+    // flip a single-evening session that merely stays running past midnight into a
+    // multi-day report. Every other event type still counts, as before.
+    if (ev.event !== 'heartbeat') dayKeysSeen.add(dayKey(ev.ts));
 
     if (ev.button_id && ev.button_label) {
       latestLabel.set(ev.button_id, ev.button_label);
@@ -358,6 +572,30 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
     // later return_home, so close it now as an orphan (see closeVisitOrphaned).
     if (ev.event === 'app_resume' || ev.event === 'kiosk_start' || ev.event === 'kiosk_stop') {
       for (const id of Array.from(openVisitPaths.keys())) closeVisitOrphaned(id);
+    }
+
+    // attract loop (feature F): a period runs from attract_start to the next attract_end,
+    // or to kiosk_stop/kiosk_start/app_resume, or (handled after the loop) the end of the
+    // log, whichever comes first (see ReportStats.attractStarts doc comment / SPEC).
+    if (ev.event === 'attract_start') {
+      attractStarts += 1;
+      const ms = parseTs(ev.ts);
+      // Defensive: a second attract_start with no closing event in between (shouldn't happen
+      // on a real kiosk) closes the previous period here first, so periods never overlap.
+      if (openAttractFromMs !== null) attractPeriods.push({ fromMs: openAttractFromMs, toMs: ms });
+      openAttractFromMs = ms;
+    } else if (ev.event === 'attract_end') {
+      attractEnds += 1;
+      if (openAttractFromMs !== null) {
+        attractPeriods.push({ fromMs: openAttractFromMs, toMs: parseTs(ev.ts) });
+        openAttractFromMs = null;
+      }
+    } else if (
+      (ev.event === 'kiosk_start' || ev.event === 'kiosk_stop' || ev.event === 'app_resume') &&
+      openAttractFromMs !== null
+    ) {
+      attractPeriods.push({ fromMs: openAttractFromMs, toMs: parseTs(ev.ts) });
+      openAttractFromMs = null;
     }
 
     if (ev.event === 'button_press' && ev.button_id) {
@@ -484,6 +722,30 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
   // killed, or the log/export scope simply ends mid-visit), so orphan it too.
   for (const id of Array.from(openVisitPaths.keys())) closeVisitOrphaned(id);
 
+  // An attract period still open at the end of the log (no attract_end, kiosk_stop,
+  // kiosk_start or app_resume came after it in scope) closes at the log's own last event.
+  if (openAttractFromMs !== null) {
+    attractPeriods.push({ fromMs: openAttractFromMs, toMs: parseTs(lastTs) });
+  }
+
+  // Clip each attract period into the buckets it overlaps, so ActivityBucket.attractMs stays
+  // a single number per bucket rather than growing with the number of attract periods.
+  const bucketAttractMs = new Array<number>(numBuckets).fill(0);
+  const scopeEndMs = startMs + numBuckets * bucketMs;
+  for (const period of attractPeriods) {
+    const from = Math.max(period.fromMs, startMs);
+    const to = Math.min(period.toMs, scopeEndMs);
+    if (!(to > from)) continue;
+    const firstIdx = Math.min(numBuckets - 1, Math.max(0, Math.floor((from - startMs) / bucketMs)));
+    const lastIdx = Math.min(numBuckets - 1, Math.max(0, Math.floor((to - startMs - 1) / bucketMs)));
+    for (let i = firstIdx; i <= lastIdx; i++) {
+      const bucketStart = startMs + i * bucketMs;
+      const bucketEnd = bucketStart + bucketMs;
+      const overlap = Math.min(to, bucketEnd) - Math.max(from, bucketStart);
+      if (overlap > 0) bucketAttractMs[i] += overlap;
+    }
+  }
+
   // overall average dwell = matched (per-button) dwell + orphan-return dwell
   let matchedDwellSum = 0;
   let matchedDwellCount = 0;
@@ -521,7 +783,7 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       obj[id] = c;
       total += c;
     }
-    return { start, end, counts: obj, total };
+    return { start, end, counts: obj, total, attractMs: bucketAttractMs[i] };
   });
 
   const isMultiDay = dayKeysSeen.size > 1;
@@ -551,6 +813,10 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
   const otherPaths = allPaths.slice(8).reduce((s, p) => s + p.count, 0);
   const totalPaths = allPaths.reduce((s, p) => s + p.count, 0);
 
+  const uptime = computeUptime(sorted);
+  const uptimePct = uptimePctOf(uptime);
+  const attractPullInPct = attractStarts > 0 ? (attractEnds / attractStarts) * 100 : null;
+
   return {
     sessionId,
     firstTs,
@@ -573,5 +839,10 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
     topPaths,
     otherPaths,
     totalPaths,
+    uptime,
+    uptimePct,
+    attractStarts,
+    attractEnds,
+    attractPullInPct,
   };
 }

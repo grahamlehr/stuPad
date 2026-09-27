@@ -308,6 +308,37 @@ export interface KioskConfig {
    * existed won't have it; the store normalises a missing value to `defaultGlow()`.
    */
   glow: GlowConfig;
+  /**
+   * Free text identifying which physical iPad this is (e.g. "Stand A"), printed in the PDF
+   * header so reports from different stands can be told apart. Describes the device, not the
+   * deck, so loading a new deck keeps the previous value instead of resetting it (the one
+   * exception to "loading a new deck resets every setting to its default", see SPEC). Configs
+   * saved before this field existed won't have it; the store normalises a missing value to `''`.
+   */
+  deviceName: string;
+  /**
+   * Draws people in when nobody has touched the kiosk for a while (SPEC "Kiosk mode
+   * behaviour"). Off by default. Configs saved before this field existed won't have it; the
+   * store normalises a missing value to `defaultAttract()`. Deck-specific (like every other
+   * setting except `deviceName`): loading a new deck resets it to the default.
+   */
+  attract: AttractConfig;
+}
+
+export interface AttractConfig {
+  enabled: boolean;
+  /** seconds of idle time on Home before the loop starts, 15..600 */
+  idleSec: number;
+  /** cycle: crossfades through `slides` (plus Home); pulse: stays on Home with a stronger glow */
+  mode: 'cycle' | 'pulse';
+  /** slide numbers (2+) to include when cycling, in addition to Home, which is always included */
+  slides: number[];
+  /** seconds each slide is shown before advancing, cycle mode only, 3..60 */
+  slideSec: number;
+}
+
+export function defaultAttract(): AttractConfig {
+  return { enabled: false, idleSec: 60, mode: 'cycle', slides: [], slideSec: 6 };
 }
 
 export interface GlowConfig {
@@ -346,6 +377,8 @@ export function defaultConfig(fileName: string, now = new Date()): KioskConfig {
     adminPin: null,
     useRaster: false,
     glow: defaultGlow(),
+    deviceName: '',
+    attract: defaultAttract(),
   };
 }
 
@@ -368,7 +401,10 @@ export type EventType =
   | 'app_resume'
   | 'admin_unlock_fail'
   | 'log_cleared'
-  | 'slide_nav';
+  | 'slide_nav'
+  | 'heartbeat'
+  | 'attract_start'
+  | 'attract_end';
 
 export type ReturnMethod = 'home_button' | 'tap' | 'timeout';
 

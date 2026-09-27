@@ -9,6 +9,8 @@ import {
   drawTapHeatmap,
   drawSlideTimeChart,
   drawPathTable,
+  drawUptimeStrip,
+  ATTRACT_BAND_LEGEND_COLOR,
 } from '../../src/report/charts';
 import { makeMockCtx } from './mockCtx';
 
@@ -39,6 +41,11 @@ describe('chart functions guard a null context', () => {
   });
   it('drawPathTable does not throw with a null ctx', () => {
     expect(() => drawPathTable(null, 100, 100, { entries: [] })).not.toThrow();
+  });
+  it('drawUptimeStrip does not throw with a null ctx', () => {
+    expect(() =>
+      drawUptimeStrip(null, 100, 100, { startMs: 0, endMs: 1000, spans: [], gaps: [] }),
+    ).not.toThrow();
   });
 });
 
@@ -93,6 +100,47 @@ describe('drawActivityChart', () => {
     // bucket 1: 2 segments (b1, b2), bucket 2: 1 segment (b2 only, b1 is 0), plus 1 background fill
     expect(callCount('fillRect')).toBe(4);
   });
+
+  /** fillStyle is a plain settable property on the mock ctx (not a per-call arg), so capture
+   * it at the moment each fillRect call is made. */
+  function trackFillStyles(ctx: CanvasRenderingContext2D): { style: string }[] {
+    const record: { style: string }[] = [];
+    const orig = ctx.fillRect.bind(ctx);
+    ctx.fillRect = ((...args: Parameters<typeof ctx.fillRect>) => {
+      record.push({ style: String(ctx.fillStyle) });
+      return orig(...args);
+    }) as typeof ctx.fillRect;
+    return record;
+  }
+
+  it('draws no attract band when no bucket has attractMs', () => {
+    const { ctx } = makeMockCtx();
+    const fills = trackFillStyles(ctx);
+    drawActivityChart(ctx, 600, 300, {
+      buckets: [{ label: '09:00', counts: { b1: 1 } }],
+      series: [{ id: 'b1', label: 'A', color: '#111' }],
+      bucketMs: 300_000,
+    });
+    expect(fills.some((f) => f.style.startsWith('rgba(42, 3, 76'))).toBe(false);
+  });
+
+  it('draws a shaded band for a bucket with attractMs, scaled by attractMs / bucketMs', () => {
+    const { ctx } = makeMockCtx();
+    const fills = trackFillStyles(ctx);
+    drawActivityChart(ctx, 600, 300, {
+      buckets: [
+        { label: '09:00', counts: { b1: 1 }, attractMs: 150_000 }, // half the bucket
+        { label: '09:05', counts: { b1: 0 } }, // no band
+      ],
+      series: [{ id: 'b1', label: 'A', color: '#111' }],
+      bucketMs: 300_000,
+    });
+    const band = fills.find((f) => f.style.startsWith('rgba(42, 3, 76'));
+    expect(band).toBeDefined();
+    // 150_000 / 300_000 = 0.5 of the band's max opacity.
+    const alpha = Number(band!.style.match(/,\s*([\d.]+)\)$/)?.[1]);
+    expect(alpha).toBeCloseTo(0.11, 2);
+  });
 });
 
 describe('drawBarChart', () => {
@@ -117,6 +165,90 @@ describe('drawHeatmapChart', () => {
     drawHeatmapChart(ctx, 600, 200, { days: ['2026-10-14', '2026-10-15'], matrix });
     // 48 cells + 1 background fill
     expect(callCount('fillRect')).toBe(49);
+  });
+});
+
+describe('drawUptimeStrip', () => {
+  const startMs = Date.parse('2026-10-14T09:00:00.000+00:00');
+  const endMs = Date.parse('2026-10-14T10:00:00.000+00:00');
+
+  it('draws the stopped background, one rect per span and per gap, plus 3 legend swatches', () => {
+    const { ctx, callCount } = makeMockCtx();
+    drawUptimeStrip(ctx, 600, 100, {
+      startMs,
+      endMs,
+      spans: [{ from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:50:00.000+00:00', monitored: true }],
+      gaps: [{ from: '2026-10-14T09:20:00.000+00:00', to: '2026-10-14T09:45:00.000+00:00' }],
+    });
+    // background fill (clearBg) + stopped rect + 1 span rect + 1 gap rect + 3 legend swatches
+    expect(callCount('fillRect')).toBe(1 + 1 + 1 + 1 + 3);
+    // one label per legend entry: Running, Down, Stopped (no "No heartbeat data": no unmonitored span)
+    const labels = ctx.fillText as unknown as { mock: { calls: unknown[][] } };
+    const texts = labels.mock.calls.map((c) => c[0]);
+    expect(texts).toEqual(['Running', 'Down', 'Stopped']);
+  });
+
+  it('draws an unmonitored span in neutral grey and adds a "No heartbeat data" legend entry', () => {
+    const { ctx, callCount } = makeMockCtx();
+    drawUptimeStrip(ctx, 600, 100, {
+      startMs,
+      endMs,
+      spans: [{ from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:50:00.000+00:00', monitored: false }],
+      gaps: [],
+    });
+    // background fill + stopped rect + 1 span rect + 4 legend swatches (the extra one for "No heartbeat data")
+    expect(callCount('fillRect')).toBe(1 + 1 + 1 + 4);
+    const labels = ctx.fillText as unknown as { mock: { calls: unknown[][] } };
+    const texts = labels.mock.calls.map((c) => c[0]);
+    expect(texts).toEqual(['Running', 'Down', 'Stopped', 'No heartbeat data']);
+  });
+
+  it('mixes monitored and unmonitored spans without the legend entry leaking into a fully-monitored strip', () => {
+    const { ctx, callCount } = makeMockCtx();
+    drawUptimeStrip(ctx, 600, 100, {
+      startMs,
+      endMs,
+      spans: [
+        { from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:20:00.000+00:00', monitored: false },
+        { from: '2026-10-14T09:20:00.000+00:00', to: '2026-10-14T09:50:00.000+00:00', monitored: true },
+      ],
+      gaps: [],
+    });
+    // background + stopped rect + 2 span rects + 4 legend swatches
+    expect(callCount('fillRect')).toBe(1 + 1 + 2 + 4);
+  });
+
+  it('draws just the stopped background (plus legend) when there are no spans', () => {
+    const { ctx, callCount } = makeMockCtx();
+    drawUptimeStrip(ctx, 600, 100, { startMs, endMs, spans: [], gaps: [] });
+    // background fill + stopped rect + 3 legend swatches, no span/gap rects
+    expect(callCount('fillRect')).toBe(1 + 1 + 3);
+  });
+
+  it('skips a span or gap with an unparseable from/to instead of drawing a garbage rect', () => {
+    const { ctx, callCount } = makeMockCtx();
+    expect(() =>
+      drawUptimeStrip(ctx, 600, 100, {
+        startMs,
+        endMs,
+        spans: [{ from: 'nonsense', to: '2026-10-14T09:50:00.000+00:00', monitored: true }],
+        gaps: [{ from: 'also nonsense', to: 'still nonsense' }],
+      }),
+    ).not.toThrow();
+    // background fill + stopped rect + 3 legend swatches; neither the bad span nor the bad gap draws
+    expect(callCount('fillRect')).toBe(1 + 1 + 3);
+  });
+
+  it('does not throw when startMs === endMs (zero-width axis)', () => {
+    const { ctx } = makeMockCtx();
+    expect(() =>
+      drawUptimeStrip(ctx, 600, 100, {
+        startMs,
+        endMs: startMs,
+        spans: [{ from: '2026-10-14T09:00:00.000+00:00', to: '2026-10-14T09:00:00.000+00:00', monitored: true }],
+        gaps: [],
+      }),
+    ).not.toThrow();
   });
 });
 
@@ -259,5 +391,11 @@ describe('drawPathTable', () => {
     drawPathTable(ctx, 500, 200, { entries: [{ path: [], label: 'Other', count: 5, pct: 25, ended: false }] });
     const texts = calls.filter((c) => c.method === 'fillText').map((c) => c.args[0]);
     expect(texts).toContain('Other');
+  });
+});
+
+describe('ATTRACT_BAND_LEGEND_COLOR', () => {
+  it('is a solid hex colour usable as a jsPDF legend swatch fill', () => {
+    expect(ATTRACT_BAND_LEGEND_COLOR).toMatch(/^#[0-9a-f]{6}$/);
   });
 });

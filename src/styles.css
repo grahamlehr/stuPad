@@ -722,6 +722,22 @@ input[type='range'] {
   font-variant-numeric: tabular-nums;
 }
 
+.attract-slide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 104px);
+  gap: 10px;
+  margin: 4px 0 16px;
+}
+
+.attract-slide-check {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
 /* ------------------------------------------------------------------ kiosk */
 
 .kiosk-root {
@@ -781,5 +797,51 @@ input[type='range'] {
 @media (prefers-reduced-motion: reduce) {
   .kiosk-glow {
     animation: none;
+  }
+}
+
+/* Attract loop, pulse mode (src/kiosk/index.ts): the "Tap to start" overlay and the stronger
+   glow layer are built once and left in the DOM; only this class is toggled to show them, and
+   only `opacity` animates, matching the button-glow pulse above. */
+.kiosk-attract-pulse-layer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* kiosk-attract-pulse is toggled on the controller's root (the stage host div), not on the
+   outer .kiosk-root: no .kiosk-root prefix here, or the compound selector never matches. */
+.kiosk-attract-pulse .kiosk-attract-pulse-layer {
+  animation: kiosk-attract-pulse-fade 1600ms ease-in-out infinite alternate;
+}
+
+@keyframes kiosk-attract-pulse-fade {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.kiosk-attract-tap {
+  position: absolute;
+  left: 50%;
+  bottom: 8%;
+  transform: translateX(-50%);
+  padding: 16px 32px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 36px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kiosk-attract-pulse .kiosk-attract-pulse-layer {
+    animation: none;
+    opacity: 1;
   }
 }
