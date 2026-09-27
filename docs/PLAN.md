@@ -41,6 +41,7 @@ export class SlideStage {
 }
 export function renderThumbnail(deck: Deck, index: number, widthPx: number): HTMLElement;
 export function preloadDeckFonts(families: string[], timeoutMs?): Promise<void>; // warms the bundled fonts a deck uses (never throws; no-op without document.fonts)
+export function ensureFontFaces(): void;                                      // injects the bundled @font-face rules once (renderer and app startup)
 export function releaseThumbnails(): void;                                   // revokes the object URLs renderThumbnail cached
 export function rasterizeDeck(deck: Deck, widthPx?: number): Promise<Deck>; // clone with raster/N.png media + slide.rasterKey; a slide that fails to rasterise is left without one
 export function rasterizeSlide(deck: Deck, index: number, widthPx?: number): Promise<Blob | null>; // one slide as PNG (used for the PDF home thumbnail)

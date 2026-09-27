@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FONT_FACES } from '../../src/render/font-faces';
-import { BUNDLED_FONT_FAMILIES, fontFaceCss, embeddedFontCss, preloadDeckFonts } from '../../src/render/fonts';
+import { BUNDLED_FONT_FAMILIES, fontFaceCss, embeddedFontCss, ensureFontFaces, preloadDeckFonts } from '../../src/render/fonts';
 import { KNOWN_FONTS, isKnownFont } from '../../src/pptx/fonts';
 
 const FONT_DIR = path.resolve(__dirname, '../../public/fonts');
@@ -51,6 +51,14 @@ describe('bundled fonts', () => {
     const css = fontFaceCss();
     expect(css.match(/@font-face/g)).toHaveLength(FONT_FACES.length);
     expect(css).toContain(`url("${import.meta.env.BASE_URL}fonts/inter-normal-100-900-latin.woff2")`);
+  });
+
+  it('ensureFontFaces injects the rules into the document once', () => {
+    ensureFontFaces();
+    ensureFontFaces();
+    const styles = document.querySelectorAll('style#stupad-fonts');
+    expect(styles).toHaveLength(1);
+    expect(styles[0].textContent).toBe(fontFaceCss());
   });
 });
 
