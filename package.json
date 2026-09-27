@@ -1,7 +1,7 @@
 {
   "name": "stupad",
   "private": true,
-  "version": "1.2.2",
+  "version": "1.2.3",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
@@ -9,7 +9,7 @@
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "template": "node scripts/make-template.mjs",
+    "fixtures": "node scripts/make-fixtures.mjs",
     "fonts": "node scripts/make-fonts.mjs"
   },
   "dependencies": {

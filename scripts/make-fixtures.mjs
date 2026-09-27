@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
- * Builds public/template.pptx (the downloadable, "good" template) using pptxgenjs,
- * and writes test fixtures to tests/fixtures/:
- *   good.pptx           - same design as the template (copy)
+ * Builds the test fixtures in tests/fixtures/ using pptxgenjs. The downloadable
+ * public/template.pptx is maintained by hand in PowerPoint and is not generated here.
+ *   good.pptx           - home (4 buttons) + destinations, a Next/Back chain and an
+ *                          unlinked rules slide
  *   one-button.pptx      - only 1 button on the home slide -> too_few_buttons error
  *   with-image.pptx      - image + gradient background
  *   broken-link.pptx     - crafted from good.pptx with a rels target pointed at nothing
@@ -14,7 +15,7 @@
  *                          a self-link (authoring mistake -> self_link warning), and a
  *                          Terms slide whose Back shape uses `lastslideviewed`
  *
- * Run: npm run template
+ * Run: npm run fixtures
  */
 import PptxGenJS from 'pptxgenjs';
 import JSZip from 'jszip';
@@ -24,7 +25,6 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const PUBLIC_DIR = path.join(ROOT, 'public');
 const FIXTURES_DIR = path.join(ROOT, 'tests', 'fixtures');
 
 const FONT = 'Helvetica Neue';
@@ -544,13 +544,9 @@ async function makeGroupedButton(goodPath, outPath) {
 
 async function main() {
   const good = buildGoodDeck();
-  const templatePath = path.join(PUBLIC_DIR, 'template.pptx');
-  await writePptx(good, templatePath);
-  await assertSlideJumpAction(templatePath);
-  console.log(`Wrote ${templatePath}`);
-
   const goodFixturePath = path.join(FIXTURES_DIR, 'good.pptx');
-  await fs.copyFile(templatePath, goodFixturePath);
+  await writePptx(good, goodFixturePath);
+  await assertSlideJumpAction(goodFixturePath);
   console.log(`Wrote ${goodFixturePath}`);
 
   const oneButton = buildOneButtonDeck();
