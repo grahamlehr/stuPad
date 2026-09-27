@@ -4,7 +4,7 @@ Development plan for the next set of features, written Sep 27, 2026 against v1.2
 
 ## Summary and order
 
-Each row is one pull request and one release (every merge to `main` bumps `package.json`). The order puts report-only work first (no stored-data changes, lowest risk), then new logging that later reports build on, then kiosk and parser features, and the storage migration last because it touches everything.
+Each row is one pull request and one release (every merge to `main` bumps `package.json`). The order puts report-only work first (no stored-data changes, lowest risk), then new logging that later reports build on, then parser and kiosk features, with video last because it carries the most risk for 12-hour runs.
 
 | # | Release | Feature | Size | Shared contract changes (`src/types.ts`) |
 | --- | --- | --- | --- | --- |
@@ -12,16 +12,14 @@ Each row is one pull request and one release (every merge to `main` bumps `packa
 | B | 1.3.0 | 1. Miss-tap heatmap on the home slide (PDF) | S | None |
 | C | 1.4.0 | 2. Time per slide and common paths (PDF) | M | None |
 | D | 1.5.0 | 3. Heartbeat and uptime | S | `EventType += 'heartbeat'`; `KioskConfig.deviceName` |
-| E | 1.6.0 | 6. Combine iPads by importing CSVs | M | `LogEvent.device`; `CSV_COLUMNS += 'device'` |
-| F | 1.7.0 | Embedded fonts from the .pptx | M-L | `Deck.embeddedFonts`; new `Issue` code |
-| G | 1.8.0 | 5. Attract loop | M | `KioskConfig.attract`; `EventType += 'attract_start' \| 'attract_end'` |
-| H | 1.9.0 | 9. Polls and ratings | M | `Deck.pollOptions`; `EventType += 'vote'`; `LogEvent.poll`, `LogEvent.choice` |
-| I | 1.10.0 | 8. Video on destination slides | L | `SlideElement += VideoElement`; `EventType += 'video_end'`; `LogEvent.watched_ms` |
-| J | 2.0.0 | 7. Several decks per iPad | L | `Deck` storage keyed by id; `LogEvent.deck_id`; IndexedDB version 2 |
+| E | 1.6.0 | Embedded fonts from the .pptx | M-L | `Deck.embeddedFonts`; new `Issue` code |
+| F | 1.7.0 | 5. Attract loop | M | `KioskConfig.attract`; `EventType += 'attract_start' \| 'attract_end'` |
+| G | 1.8.0 | 9. Polls and ratings | M | `Deck.pollOptions`; `EventType += 'vote'`; `LogEvent.poll`, `LogEvent.choice` |
+| H | 1.9.0 | 8. Video on destination slides | L | `SlideElement += VideoElement`; `EventType += 'video_end'`; `LogEvent.watched_ms` |
 
-All contract changes are additive. New `LogEvent` fields are optional, and new `CSV_COLUMNS` are appended at the end so older CSVs still import (E). Each new `Deck` or `KioskConfig` field gets a default on load in `src/store/index.ts`, following the existing `navLinks` and `glow` shims.
+All contract changes are additive. New `LogEvent` fields are optional, and new `CSV_COLUMNS` are appended at the end so existing spreadsheets that read the CSV by column position keep working. Each new `Deck` or `KioskConfig` field gets a default on load in `src/store/index.ts`, following the existing `navLinks` and `glow` shims.
 
-Parallel work: A, B and C touch only `src/ui/setup.ts` or `src/report/`, so they can run alongside D. F (parser and renderer) is independent of everything before it. G, H and I all edit `KioskController.handleTap`, so land them one after another.
+Parallel work: A, B and C touch only `src/ui/setup.ts` or `src/report/`, so they can run alongside D. E (parser and renderer) is independent of everything before it. F, G and H all edit `KioskController.handleTap`, so land them one after another.
 
 Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check on the Pages build for anything touching kiosk, export or the service worker.
 
@@ -69,7 +67,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 
 **Goal.** Prove the kiosk ran all day, and show when it didn't (crash, battery, someone leaving the app).
 
-- `src/types.ts`: `EventType += 'heartbeat'`. `KioskConfig.deviceName: string` (default "", later shown on reports and used by E). Default `''` for configs saved before the field existed.
+- `src/types.ts`: `EventType += 'heartbeat'`. `KioskConfig.deviceName: string` (default "", shown in the PDF header so reports from different stands can be told apart). Default `''` for configs saved before the field existed.
 - `src/main.ts` `App` owns the timer, not the controller, so the tap path stays untouched. It sets a 15-minute `setInterval` in `enterKiosk` and clears it in `exitToSetup` and `clearAll`. It logs `heartbeat` on each tick. No extra log on resume: `app_resume` is already logged.
 - iOS suspends timers when the app is backgrounded or the screen locks. The resulting gap in heartbeats is exactly the downtime signal we want.
 - `src/report/stats.ts`: `uptime` from the running spans (`kiosk_start`/`app_resume` to `kiosk_stop` or the last event). Any gap longer than 20 minutes between consecutive events inside a span counts as down. Output: `uptimeMs`, `downtimeMs`, `gaps: { from, to }[]`.
@@ -78,23 +76,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 - Volume: about 100 events a day, negligible against the 100k target.
 - Tests: fake timers for the interval and its cleanup on stop; stats gap detection across midnight and across a `kiosk_stop`/`kiosk_start`.
 
-## E. Combine several iPads (item 6)
-
-**Goal.** One report across several iPads at the same stand, without a server.
-
-- Workflow: each iPad exports CSV, then the admin AirDrops or Saves to Files onto one iPad. In the admin panel, "Add CSVs from other iPads…" (a multi-file picker, `.csv`), then Export PDF as usual.
-- Imported events are **not written to IndexedDB**. They live in memory for the admin panel's lifetime and are merged with the local scope at export time. This keeps the local log strictly append-only and avoids a schema change. The trade-off: imports must be re-added after leaving the admin panel. The panel lists the loaded files with a remove button.
-- `src/types.ts`: `LogEvent.device?: string`, `CSV_COLUMNS` gains `device` as its last column. `App.log` stamps `device` from `config.deviceName` (from D).
-- `src/report/csv-import.ts` (new):
-  - An RFC 4180 parser (quotes, CRLF, BOM) and `fromCsv(text): { events, errors }`.
-  - It checks the header against `CSV_COLUMNS`, accepting a missing `device` column (old exports). Those rows get the device "import 1", "import 2" and so on, from the file order.
-  - Rejects a file whose header doesn't match, and reports the row count.
-- Labels: `computeStats` gets labels from the local deck. For imported rows, fall back to the row's `button_label`. Buttons are matched by `button_id` when both devices ran the same deck; otherwise they are kept apart.
-- Duplicates: the same CSV added twice would double-count. De-duplicate on `(session_id, id)`.
-- PDF: when more than one device is present, Summary gains a per-device tile row and Button share gains a presses-by-device bar.
-- Tests: round-trip `toCsv` → `fromCsv`, quoted commas and newlines, BOM, old header without `device`, duplicate file.
-
-## F. Embedded fonts from the .pptx
+## E. Embedded fonts from the .pptx
 
 **Goal.** A deck that embeds its fonts (File > Options > Save > Embed fonts in PowerPoint) renders in those fonts instead of falling back with a warning.
 
@@ -103,9 +85,9 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 - Each relationship points at `ppt/fonts/fontN.fntdata`. These files are Embedded OpenType (EOT): a header, then the TrueType data. The data may be XOR-obfuscated (header flag `0x10000000`, key `0x50`) and may be MicroType Express compressed (flag `0x4`).
 - Browsers don't load EOT, so the parser must unwrap it to plain TrueType.
 
-**Phase F0, spike (first, before code).** Collect real decks saved with embedded fonts from PowerPoint for Windows, PowerPoint for Mac and PowerPoint for the web. Record for each: the EOT version, the flags, and whether the font is subsetted ("embed only characters used"). This settles whether MicroType Express decompression is needed on day one. If every sample is uncompressed, ship F1 alone and treat compressed fonts as a warning.
+**Phase E0, spike (first, before code).** Collect real decks saved with embedded fonts from PowerPoint for Windows, PowerPoint for Mac and PowerPoint for the web. Record for each: the EOT version, the flags, and whether the font is subsetted ("embed only characters used"). This settles whether MicroType Express decompression is needed on day one. If every sample is uncompressed, ship E1 alone and treat compressed fonts as a warning.
 
-**Phase F1, uncompressed EOT.**
+**Phase E1, uncompressed EOT.**
 - `src/pptx/embedded-fonts.ts` (new):
   - `readEmbeddedFonts(pkg, presDoc, presRels)` → `{ fonts: EmbeddedFontDef[], issues }`.
   - `eotToTtf(bytes)` parses the EOT header: `EOTSize`, `FontDataSize`, `Version`, `Flags`, then skips the padded name records. It un-XORs if flagged and returns the TrueType bytes, or `null` for compressed data.
@@ -122,11 +104,11 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 - Fixtures: pptxgenjs cannot embed fonts. `scripts/make-fixtures.mjs` gains `embedded-font.pptx`, built by patching `good.pptx` with JSZip: add a small OFL TrueType file wrapped in an EOT header (one plain, one XOR-flagged) plus the `embeddedFontLst` entries. The source TTF is checked in under `tests/fixtures/fonts/` with its licence.
 - Tests: EOT header parsing (version 0x00020001 and 0x00020002, XOR, compressed → null), `missing_font` suppression, FontFace registration and disposal (stub `FontFace`/`document.fonts` in jsdom).
 
-**Phase F2, MicroType Express (only if F0 finds compressed fonts in the wild).** Port an MTX decoder (LZCOMP plus the CTF glyph transforms; the reference is the open-source `libeot`) into `src/pptx/mtx.ts`. It's roughly 1,000 lines. It has to be bundled locally (no runtime network) and lazy-imported, so it costs nothing for decks without compressed fonts. Test against the F0 sample files.
+**Phase E2, MicroType Express (only if E0 finds compressed fonts in the wild).** Port an MTX decoder (LZCOMP plus the CTF glyph transforms; the reference is the open-source `libeot`) into `src/pptx/mtx.ts`. It's roughly 1,000 lines. It has to be bundled locally (no runtime network) and lazy-imported, so it costs nothing for decks without compressed fonts. Test against the E0 sample files.
 
 **Docs.** SPEC "Fonts" (embedded fonts now honoured), README deck rules, ARCHITECTURE parser and render sections, and ARCHITECTURE known gaps (remove the entry).
 
-## G. Attract loop (item 5)
+## F. Attract loop (item 5)
 
 **Goal.** Draw people in when nobody has touched the kiosk for a while.
 
@@ -145,7 +127,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
   - Miss taps during attract are not logged, which keeps B's heatmap clean.
 - Tests: controller flows with fake timers (idle to attract, tap to Home with no press, the secret sequence during attract, stop clears timers).
 
-## H. Polls and ratings (item 9)
+## G. Polls and ratings (item 9)
 
 **Goal.** Let a deck ask a question ("Which topic matters most?", "Rate this stand 1 to 5") without collecting personal data.
 
@@ -161,7 +143,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 - Tests: name parsing (underscores in choice names), vote once per visit, link-then-navigate, CSV columns.
 - Decision to confirm: whether a home-slide vote with no link should count as a "visit" for the Button share page. The proposal is no.
 
-## I. Video on destination slides (item 8)
+## H. Video on destination slides (item 8)
 
 **Goal.** Play videos that are embedded in the deck (the most common v2 ask).
 
@@ -178,25 +160,6 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 - PDF: a "Video" section on the Slides page: plays, median watched time, % watched to the end.
 - Tests: parser detection on a fixture patched with a tiny MP4 (a few KB, generated once, checked in), controller play/pause/timeout pause with a stubbed `HTMLMediaElement`.
 
-## J. Several decks per iPad (item 7)
-
-**Goal.** Hold a library of decks on one iPad and switch between them without reloading files.
-
-- Storage (IndexedDB version 2 migration in `openDatabase`'s `upgrade`):
-  - New `decks` store keyed by `deck.id`, holding `{ deck, config }` together, so each deck keeps its own labels, timeout and glow.
-  - The old `deck/current` and `config/current` move into it.
-  - `state` gains `activeDeckId`.
-  - The old stores are deleted in the same upgrade.
-- Why this is 2.0.0: a build older than this can't read the new layout. Pages auto-updates every iPad, so nobody runs old builds in practice, but it meets CLAUDE.md's definition of a breaking change.
-- Store API: `listDecks()`, `saveDeck(deck, config)`, `loadDeck(id)`, `deleteDeck(id)`, `setActiveDeck(id)`. `loadDeck()` with no id returns the active deck, so `main.ts` changes little.
-- Logging: `LogEvent.deck_id` stamped by `App.log`. Reports can then filter by deck. Export scope gains "This deck", and the PDF names the deck.
-- UI:
-  - Setup's Load step becomes a library list (name, slides, size, last used) with Choose, Delete and "Add .pptx…".
-  - The admin panel gains "Switch deck". It logs `kiosk_stop`, activates the other deck and starts a new session, so a session always belongs to one deck.
-- Storage limits: a 100 MB deck and its rasters can fill a lot of the quota. Show per-deck size and the `navigator.storage.estimate()` headroom, and refuse to add a deck that would leave less than 20% free.
-- Clear previous data still wipes everything. Deleting one deck leaves its events in the log, still tagged with `deck_id`.
-- Tests: upgrade from a version 1 database built by the current code (fake-indexeddb), per-deck config isolation, switch deck logging, delete deck with events kept.
-
 ---
 
 ## Decisions needed before starting
@@ -204,5 +167,4 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 1. **Attract loop:** should the tap that ends the loop press a button when the loop happens to be on Home? The plan says no; it only wakes the kiosk.
 2. **Polls:** one vote per poll per visit (the plan), or a vote on every tap?
 3. **Video:** allow sound, or always muted? Pause the timeout while a video plays (the plan)?
-4. **Deck library:** is a 2.0.0 storage migration acceptable, or should it wait?
-5. **Embedded fonts:** sample decks with embedded fonts, saved from the PowerPoint versions the team actually uses, are needed for the F0 spike.
+4. **Embedded fonts:** sample decks with embedded fonts, saved from the PowerPoint versions the team actually uses, are needed for the E0 spike.
