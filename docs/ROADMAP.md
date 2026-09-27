@@ -118,7 +118,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
   - Setup gets a toggle, idle time, mode, and in cycle mode checkboxes on the slide thumbnails to pick attract slides (Home is always included).
 - Kiosk (`src/kiosk/index.ts`):
   - A new third mode, `attract`. On Home, an idle timer starts after the last accepted tap. When it fires, the kiosk logs `attract_start` and cycles with `stage.show()` (layers already exist, so no DOM rebuild).
-  - The first tap in attract mode stops the loop, shows Home and logs `attract_end` with `dwell_ms`. The tap does not press a button, because the visitor can't see Home's buttons while another slide is showing.
+  - The first tap in attract mode stops the loop, shows Home and logs `attract_end` with `dwell_ms`. The tap never presses a button, in either mode and even when the loop happens to be showing Home (decided): it only wakes the kiosk.
   - The secret sequence still takes priority in attract mode.
 - 12-hour safety: the cycle uses one `setTimeout` chain, cleared in `stop()` and on every mode change. Pulse mode adds one CSS class, and only `opacity` animates.
 - Stats and PDF:
@@ -141,7 +141,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 - Setup: poll options appear outlined in the preview; labels can be renamed like buttons.
 - PDF: page "Poll results" per poll: bar chart of choices with counts and %. For `RATE_` polls, add the mean score.
 - Tests: name parsing (underscores in choice names), vote once per visit, link-then-navigate, CSV columns.
-- Decision to confirm: whether a home-slide vote with no link should count as a "visit" for the Button share page. The proposal is no.
+- Open (decision 5 below): whether a home-slide vote with no link should count as a "visit" for the Button share page. The proposal is no.
 
 ## H. Video on destination slides (item 8)
 
@@ -149,11 +149,11 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 
 **Today.** A video in PowerPoint is a `<p:pic>` whose `nvPr` holds `<a:videoFile r:link>` and a `p14:media r:embed` extension. The parser reads it as a plain picture, so the kiosk shows the poster frame silently, with no warning.
 
-- Parser (`src/pptx/shapes.ts`): detect `a:videoFile` / `p14:media`. Resolve the embedded media rel (MP4/MOV/M4V; other formats and linked, non-embedded files get an `unsupported_element` warning). Emit `VideoElement { kind: 'video', mediaKey, posterKey, loop, muted, autoplay }`. Read playback options from the slide timing XML where present, else autoplay on arrival.
+- Parser (`src/pptx/shapes.ts`): detect `a:videoFile` / `p14:media`. Resolve the embedded media rel (MP4/MOV/M4V; other formats and linked, non-embedded files get an `unsupported_element` warning). Emit `VideoElement { kind: 'video', mediaKey, posterKey, loop, autoplay }`. Read playback options from the slide timing XML where present, else autoplay on arrival.
 - `src/types.ts`: `VideoElement` joins the `SlideElement` union. Every `switch (el.kind)` must handle it: `renderElement` and the rasteriser's media walk in `src/render/index.ts`, text/font collection in `src/pptx/deck.ts` and `buttons.ts`, and glow radius lookup.
 - Renderer: `<video playsinline preload="metadata" poster>` with an object URL, revoked in `destroy()`. The stage gains `onShow(slide)` / `onHide(slide)` hooks so the controller can play on arrival and pause plus rewind on leaving. Only one video is ever playing. Image mode shows the poster.
-- Sound: iPad Safari allows unmuted `play()` only inside a user gesture. The tap that navigates is one, so `play()` must be called synchronously from the `pointerdown` handler, not after the fade. Autoplay that follows a timeout or the attract loop is muted.
-- Timeout interaction: while a video plays, the return-to-home timeout is paused and restarts when the video ends. Otherwise a 20 s timeout cuts off a 60 s film.
+- Sound: videos always play muted (decided), whatever the deck's own volume setting. Muted `playsinline` video may autoplay in iPad Safari without a user gesture, so `play()` can wait until the fade has finished. There is no volume control, and the operator checklist's "volume set" item stays as it is.
+- Timeout interaction (decided): while a video plays, the return-to-home timeout and idle warning are paused, and they restart from the full timeout when the video ends. Otherwise a 20 s timeout cuts off a 60 s film. A looping video never ends, so for loops the timeout restarts after the first full play. A video that stalls or errors resumes the timeout at once, so a broken file can never trap the kiosk on a slide.
 - Logging: `video_end` with `watched_ms` and `slide_from`, logged when the visitor leaves the slide or the video finishes (not on every play, to keep volume low).
 - Size: videos count toward the 100 MB deck limit. The Check step shows total video size, and a warning above 50 MB points to storage headroom on the iPad.
 - 12-hour safety: a soak run with a looping video slide, checking memory in Safari Web Inspector. Video decode is the most likely source of memory growth in the whole roadmap.
@@ -162,9 +162,18 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 
 ---
 
-## Decisions needed before starting
+## Decisions
 
-1. **Attract loop:** should the tap that ends the loop press a button when the loop happens to be on Home? The plan says no; it only wakes the kiosk.
-2. **Polls:** one vote per poll per visit (the plan), or a vote on every tap?
-3. **Video:** allow sound, or always muted? Pause the timeout while a video plays (the plan)?
-4. **Embedded fonts:** sample decks with embedded fonts, saved from the PowerPoint versions the team actually uses, are needed for the E0 spike.
+Agreed Sep 27, 2026:
+
+1. **Attract loop:** the tap that ends the loop only wakes the kiosk and never presses a button, even when the loop is showing Home.
+2. **Polls:** one vote per poll per visit; repeat taps in the same visit are not logged.
+3. **Video:** always muted. The return-to-home timeout pauses while a video plays.
+
+Waiting on:
+
+4. **Embedded fonts:** Graham is finding a deck with an embedded font for the E0 spike. E1 can start once one sample is in hand; more samples (PowerPoint for Windows, Mac and web) would settle whether E2 is needed.
+
+Still open (small, can be settled in the PR):
+
+5. **Polls:** should a home-slide vote with no link count as a visit on the Button share page? The proposal is no.
