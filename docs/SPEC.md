@@ -84,7 +84,7 @@ Buttons are ordinary shapes on slide 1 with PowerPoint's own "Link to: Slide N" 
 
 **Slide size.** 16:9 (13.333 x 7.5 in). Other sizes are letterboxed.
 
-The app should ship with a downloadable template .pptx that follows all these rules.
+The app should ship with a downloadable template .pptx that follows all these rules. The template is titled "GGPad Kiosk Template" and uses the Emota brand: Montserrat throughout, a blackberry home slide with the white Emota logo, light-lavender destination slides with the blackberry logo, and home buttons in teal, violet, grape and mint. Its theme colours and fonts are set to the Emota palette and Montserrat, so shapes and text added in PowerPoint start on-brand.
 
 ## Admin setup flow
 
