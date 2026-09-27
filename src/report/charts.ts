@@ -22,6 +22,9 @@ export interface ActivityChartBucket {
   label: string;
   /** button_id -> press count for this bucket */
   counts: Record<string, number>;
+  /** ReportStats.ActivityBucket.attractMs: ms of this bucket spent in an attract period, clipped
+   * to the bucket; 0 (or omitted) draws no band. See `drawActivityChart`'s "attract band" doc. */
+  attractMs?: number;
 }
 
 export interface ActivityChartSeries {
@@ -33,6 +36,10 @@ export interface ActivityChartSeries {
 export interface ActivityChartData {
   buckets: ActivityChartBucket[];
   series: ActivityChartSeries[];
+  /** ms per bucket (ReportStats.bucketMinutes * 60_000; every bucket is the same width). Needed
+   * to scale each bucket's attract band by attractMs / bucketMs; omit when no bucket has
+   * attractMs and no band is drawn. */
+  bucketMs?: number;
 }
 
 export interface HeatmapChartData {
@@ -270,6 +277,15 @@ export function drawDwellBarChart(
 /** Bars never grow wider than this even when a single bucket spans the whole plot. */
 const MAX_ACTIVITY_BAR_W = 140;
 
+/** Emota blackberry, as an rgb() triple, used at partial opacity for the attract band below. */
+const ATTRACT_BAND_COLOR_RGB = '42, 3, 76';
+/** Opacity of the attract band when a bucket is 100% attract time; scaled down from there by
+ * attractMs / bucketMs, so a bucket only briefly in attract mode reads as barely shaded. */
+const ATTRACT_BAND_MAX_ALPHA = 0.22;
+/** Solid approximation of the band at its max opacity over white, for the PDF legend swatch
+ * (report/pdf.ts): jsPDF's `rect('F')` fill has no alpha channel. */
+export const ATTRACT_BAND_LEGEND_COLOR = '#d0c8d8';
+
 export function drawActivityChart(
   ctx: CanvasRenderingContext2D | null,
   width: number,
@@ -279,7 +295,7 @@ export function drawActivityChart(
 ): void {
   if (!ctx) return;
   clearBg(ctx, width, height);
-  const { buckets, series } = data;
+  const { buckets, series, bucketMs } = data;
 
   const marginL = Math.max(40, 30 * fontScale);
   const marginB = Math.max(46, 38 * fontScale);
@@ -321,6 +337,16 @@ export function drawActivityChart(
   const labelEvery = Math.max(1, Math.ceil(buckets.length / 12));
 
   buckets.forEach((b, i) => {
+    // Attract band: a light shaded band spanning the bucket's full plot height, its opacity
+    // scaled by how much of the bucket's own span was spent in an attract period, so a bucket
+    // only briefly in attract mode reads as barely shaded and a fully-attract bucket reads
+    // clearly (see ATTRACT_BAND_MAX_ALPHA). Drawn behind the bars.
+    if (bucketMs && b.attractMs && b.attractMs > 0) {
+      const alpha = Math.min(1, b.attractMs / bucketMs) * ATTRACT_BAND_MAX_ALPHA;
+      ctx.fillStyle = `rgba(${ATTRACT_BAND_COLOR_RGB}, ${alpha.toFixed(3)})`;
+      ctx.fillRect(marginL + i * slotW, marginT, slotW, plotH);
+    }
+
     const x = marginL + i * slotW + (slotW - barW) / 2;
     let yTop = marginT + plotH;
     for (const sr of series) {

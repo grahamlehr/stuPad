@@ -125,12 +125,13 @@ The preview shows the home slide with each detected button outlined and labelled
 | Admin PIN after sequence | Off | 4 to 6 digits |
 | Session name | Deck file name + date | Free text, required, printed on reports and used in export file names |
 | Device name | Empty | Free text, optional, up to 40 characters, identifies which iPad this is (e.g. "Stand A"); printed in the PDF header and footer |
+| Attract loop | Off | Idle time 15 to 600 s (30 s, 60 s, 2 min or 5 min in the picker, plus a stored out-of-list value). Mode: Cycle slides or Pulse on Home. In Cycle mode, seconds per slide 3 to 60 (4, 6, 8 or 12 s in the picker) and a checkbox per slide to include (Home is always included). See "Kiosk mode behaviour" below |
 
 Loading a new deck resets every setting to its default, except the device name: it describes the iPad, not the deck, so it carries over unchanged. Settings and the parsed deck are saved to IndexedDB, so reopening the app resumes where it left off, including straight back into kiosk mode if it was running.
 
 ## Kiosk mode behaviour
 
-Kiosk mode is a Home <-> Destination loop, but a destination slide can also navigate onward to a further destination slide (a "Next"/"Back" nav link — see "PowerPoint template rules"); every transition, including onward nav, is logged.
+Kiosk mode is a Home <-> Destination loop, but a destination slide can also navigate onward to a further destination slide (a "Next"/"Back" nav link — see "PowerPoint template rules"); every transition, including onward nav, is logged. A third mode, Attract, draws people in when nobody has touched the kiosk for a while (see below).
 
 ```mermaid
 stateDiagram-v2
@@ -139,8 +140,11 @@ stateDiagram-v2
     Destination --> Destination: nav link tap
     Destination --> Home: Home button / tap
     Destination --> Home: timeout
+    Home --> Attract: idle timeout
+    Attract --> Home: any tap (wakes only)
     Home --> Admin: secret sequence
     Destination --> Admin: secret sequence
+    Attract --> Admin: secret sequence
 ```
 
 **Rules**
@@ -154,9 +158,18 @@ stateDiagram-v2
 - Repeat taps within the debounce window are ignored and not logged as presses.
 - Pinch-zoom, text selection, long-press menus, pull-to-refresh and double-tap zoom are disabled.
 - The screen is kept awake with the Screen Wake Lock API; if unavailable, the admin is told to set Auto-Lock to Never.
-- The secret sequence works on any slide and is checked before normal tap handling. A tap that continues or completes a sequence is consumed and never triggers a button. The first corner tap of a sequence is handled normally, so a button placed in a corner still works; the trade-off is that starting the sequence on a slide with a top-left button presses that button once.
+- The secret sequence works on any slide, including during the attract loop, and is checked before normal tap handling. A tap that continues or completes a sequence is consumed and never triggers a button. The first corner tap of a sequence is handled normally, so a button placed in a corner still works; the trade-off is that starting the sequence on a slide with a top-left button presses that button once (and, in attract mode, that same first tap also wakes the kiosk, since a corner tap that isn't yet continuing an attempt is handled as a normal tap, see below).
 - Taps in the letterbox (outside the slide) do nothing and are not logged.
 - If the app is closed or crashes, it relaunches straight into kiosk mode on the home slide.
+
+**Attract loop.** When the attract setting is on, an idle timer starts once the kiosk is on Home and has nothing else to do: after kiosk start, after a miss tap, after returning to Home by any method, and after waking from a previous attract period. A button press (which leaves Home) or a tap that continues the secret sequence (which counts as activity but keeps the admin's attempt going) each cancel or restart it, so an admin working the exit sequence never accidentally triggers the loop underneath themselves. When the timer fires, the kiosk logs `attract_start` and enters Attract mode:
+
+- **Cycle** crossfades through Home plus the chosen slides (any slide selected in Setup that still exists in the deck; slides removed since would just be skipped), one slide at a time, at a fixed 1000&nbsp;ms crossfade independent of the configured transition length, staying on each for the configured seconds-per-slide before advancing, and wrapping back to Home. Nothing on a non-Home slide is tappable in attract mode, so any button glow there stays hidden; Home's own glow (if on) plays normally whenever the cycle lands back on it. If nothing valid is left to cycle (the deck has no other slides, or none of the chosen ones still exist), it behaves like Pulse mode instead.
+- **Pulse** stays on Home and shows a "Tap to start" overlay with a stronger version of the button glow (at least intensity 8, and visibly coloured even if the button glow setting is off).
+
+**Decision: the tap that ends the loop only wakes the kiosk.** The first accepted tap in attract mode, wherever it lands (even directly over a button, and even when the cycle happens to be showing Home at that moment), stops the loop, shows Home with the configured transition, logs `attract_end` with `dwell_ms` (time spent in the attract period), and returns to Home mode. It never presses a button and never logs a `miss_tap`, so a heatmap or button-share report is never skewed by the loop drawing people in. That wake tap is itself the "accepted" tap for the debounce window, exactly like any other tap, so a quick second tap right after is debounced as usual and the next tap past the window is a normal Home tap.
+
+Attract mode adds no work to the destination or Home tap path beyond a mode check and re-arming a single timer; `kiosk_stop` (Setup, or the admin panel's Setup button) ends whatever attract period is running without a separate `attract_end`, since the stop itself is the end. The admin panel and PIN pad overlay the stage and their own taps never reach the kiosk controller, but the idle timer keeps running underneath them (same as the destination timeout already does behind an open admin panel), so the loop can in principle start while the admin is in the panel; nothing currently suppresses that.
 
 **Operator checklist (shown when starting kiosk)**
 
@@ -182,6 +195,8 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | `admin_unlock_fail` | Wrong PIN entered after the secret sequence |
 | `log_cleared` | Clear log or Clear previous data wiped the log; the only record left after the wipe |
 | `heartbeat` | Every 15 minutes while the kiosk is running, proving it's still alive; see "Uptime" below |
+| `attract_start` | The idle timer fires on Home and the attract loop begins |
+| `attract_end` | A tap wakes the kiosk from the attract loop; `dwell_ms` is the time spent in that attract period. Not logged when the loop is ended by `kiosk_stop`, `kiosk_start` or `app_resume` instead of a tap |
 
 **Record fields**
 
@@ -196,7 +211,7 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | `button_label` | text; on `slide_nav`, the label of the button that started the visit | Sustainability |
 | `slide_from` / `slide_to` | integer; on `slide_nav`, the slide being left and the slide being entered; on `return_home`, the slide being left and 1; on `miss_tap`, `slide_from` is 1 | 1 / 3 |
 | `method` | enum, return events only | timeout |
-| `dwell_ms` | integer; on `return_home`, time for the whole visit; on `slide_nav`, time spent on just the slide being left | 18420 |
+| `dwell_ms` | integer; on `return_home`, time for the whole visit; on `slide_nav`, time spent on just the slide being left; on `attract_end`, time spent in the attract period | 18420 |
 | `x`, `y` | tap position as % of slide, rounded to 0.1, miss taps only | 12.5, 88.0 |
 
 `dwell_ms` on each return gives time spent per destination, which is the most useful engagement measure after raw press counts. `slide_nav` events let a report break that down further into time spent per slide within a multi-slide visit, and count arrivals at each slide.
@@ -227,10 +242,10 @@ id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,metho
 
 | Page | Content |
 | --- | --- |
-| 1. Summary | Session name (with the device name alongside it, when set), date/time range, total presses, total visits, average dwell, miss taps, number of buttons, an "Uptime" tile (e.g. "97%", or "n/a" with no monitored span), onward nav taps (when any), thumbnail of home slide; a compact "Slide views" table (arrivals per slide) when the deck has any onward nav taps |
+| 1. Summary | Session name (with the device name alongside it, when set), date/time range, total presses, total visits, average dwell, miss taps, number of buttons, an "Uptime" tile (e.g. "97%", or "n/a" with no monitored span), onward nav taps (when any), an "Attract pull-in" tile (e.g. "12 / 40 (30%)", attract\_end count over attract\_start count, only shown when the loop has run at least once), thumbnail of home slide; a compact "Slide views" table (arrivals per slide) when the deck has any onward nav taps |
 | 2. Button share | Donut of presses by button with counts and %; horizontal bar of average dwell per button |
-| 3. Home slide taps (only when there are miss taps) | Heatmap of where visitors tapped and missed on the home slide (48 x 27 grid of cells, white-to-blackberry ramp), with each button's bounds drawn as an outline and label over it, and the home thumbnail underneath when one is available. Caption: miss taps as a share of all home-slide taps (button presses + miss taps) |
-| 4. Activity over time | Stacked bar chart of presses per interval, one colour per button, with a thin up/down strip underneath it on the same time axis (green for a monitored running span, muted red for a downtime gap, neutral grey for an unmonitored span with no heartbeat data, light grey outside any span), legend "Running / Down / Stopped" plus "No heartbeat data" when the scope has an unmonitored span. The interval is the finest of 5, 15, 30, 60, 120, 240 min or 1 day that keeps the chart to 48 bars or fewer |
+| 3. Home slide taps (only when there are miss taps) | Heatmap of where visitors tapped and missed on the home slide (48 x 27 grid of cells, white-to-blackberry ramp), with each button's bounds drawn as an outline and label over it, and the home thumbnail underneath when one is available. Caption: miss taps as a share of all home-slide taps (button presses + miss taps). Miss taps during the attract loop are never logged, so they never appear here |
+| 4. Activity over time | Stacked bar chart of presses per interval, one colour per button, with a light shaded band behind any bucket that overlapped an attract period (opacity scaled by how much of the bucket's own span was in attract mode) and a legend entry "Attract loop" when any bucket has one, plus a thin up/down strip underneath it on the same time axis (green for a monitored running span, muted red for a downtime gap, neutral grey for an unmonitored span with no heartbeat data, light grey outside any span), legend "Running / Down / Stopped" plus "No heartbeat data" when the scope has an unmonitored span. The interval is the finest of 5, 15, 30, 60, 120, 240 min or 1 day that keeps the chart to 48 bars or fewer |
 | 5. Return behaviour | Split of returns by Home button, tap and timeout; share of visits ending by timeout per button |
 | 6. Slides and paths (only when there are onward nav taps) | Left: horizontal bars of median time spent per slide, plus a second bar excluding timeout-ended visits. Right: a table of the most common routes through the deck ("3 → 4 → 5"), each with a count and %, top 8 plus an "Other" row |
 | 7. Hour-by-day (multi-day only) | Heatmap of presses by hour and day |
@@ -273,7 +288,6 @@ A `heartbeat` extends the report's date/time range (`firstTs`/`lastTs`, and so t
 - [ ] What is the typical use: exhibition stand, poll or vote, wayfinding, content menu? This shapes the report's headline metric.
 - [ ] Is there ever more than one iPad at the same stand, and should reports combine them?
 - [ ] Do destination slides need video (the most common ask for v2)?
-- [ ] Should the home slide have an attract loop or idle animation to draw people in?
 - [ ] Branding on the PDF report: agency, client, or neutral? (Today the admin UI and template are Emota-branded; the PDF is neutral apart from the GGPad footer and a blackberry heatmap.)
 - [ ] Should one iPad hold several decks and switch between them, or one deck at a time?
 - [ ] Pharma use: any ABPI or data-retention constraints on logging, even anonymous taps?

@@ -10,6 +10,7 @@ import {
   drawSlideTimeChart,
   drawPathTable,
   drawUptimeStrip,
+  ATTRACT_BAND_LEGEND_COLOR,
 } from '../../src/report/charts';
 import { makeMockCtx } from './mockCtx';
 
@@ -98,6 +99,47 @@ describe('drawActivityChart', () => {
     });
     // bucket 1: 2 segments (b1, b2), bucket 2: 1 segment (b2 only, b1 is 0), plus 1 background fill
     expect(callCount('fillRect')).toBe(4);
+  });
+
+  /** fillStyle is a plain settable property on the mock ctx (not a per-call arg), so capture
+   * it at the moment each fillRect call is made. */
+  function trackFillStyles(ctx: CanvasRenderingContext2D): { style: string }[] {
+    const record: { style: string }[] = [];
+    const orig = ctx.fillRect.bind(ctx);
+    ctx.fillRect = ((...args: Parameters<typeof ctx.fillRect>) => {
+      record.push({ style: String(ctx.fillStyle) });
+      return orig(...args);
+    }) as typeof ctx.fillRect;
+    return record;
+  }
+
+  it('draws no attract band when no bucket has attractMs', () => {
+    const { ctx } = makeMockCtx();
+    const fills = trackFillStyles(ctx);
+    drawActivityChart(ctx, 600, 300, {
+      buckets: [{ label: '09:00', counts: { b1: 1 } }],
+      series: [{ id: 'b1', label: 'A', color: '#111' }],
+      bucketMs: 300_000,
+    });
+    expect(fills.some((f) => f.style.startsWith('rgba(42, 3, 76'))).toBe(false);
+  });
+
+  it('draws a shaded band for a bucket with attractMs, scaled by attractMs / bucketMs', () => {
+    const { ctx } = makeMockCtx();
+    const fills = trackFillStyles(ctx);
+    drawActivityChart(ctx, 600, 300, {
+      buckets: [
+        { label: '09:00', counts: { b1: 1 }, attractMs: 150_000 }, // half the bucket
+        { label: '09:05', counts: { b1: 0 } }, // no band
+      ],
+      series: [{ id: 'b1', label: 'A', color: '#111' }],
+      bucketMs: 300_000,
+    });
+    const band = fills.find((f) => f.style.startsWith('rgba(42, 3, 76'));
+    expect(band).toBeDefined();
+    // 150_000 / 300_000 = 0.5 of the band's max opacity.
+    const alpha = Number(band!.style.match(/,\s*([\d.]+)\)$/)?.[1]);
+    expect(alpha).toBeCloseTo(0.11, 2);
   });
 });
 
@@ -349,5 +391,11 @@ describe('drawPathTable', () => {
     drawPathTable(ctx, 500, 200, { entries: [{ path: [], label: 'Other', count: 5, pct: 25, ended: false }] });
     const texts = calls.filter((c) => c.method === 'fillText').map((c) => c.args[0]);
     expect(texts).toContain('Other');
+  });
+});
+
+describe('ATTRACT_BAND_LEGEND_COLOR', () => {
+  it('is a solid hex colour usable as a jsPDF legend swatch fill', () => {
+    expect(ATTRACT_BAND_LEGEND_COLOR).toMatch(/^#[0-9a-f]{6}$/);
   });
 });

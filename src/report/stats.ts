@@ -30,6 +30,14 @@ export interface ActivityBucket {
   /** button_id -> press count within [start, end) */
   counts: Record<string, number>;
   total: number;
+  /**
+   * Milliseconds of this bucket's own [start, end) span spent inside an attract period (see
+   * `computeStats`' attract-period reconstruction below), clipped to the bucket. 0 when the
+   * loop never ran, or never overlapped this bucket. Drawn as a shaded band in the Activity
+   * chart (`drawActivityChart`); kept as a single number per bucket (not raw periods) so
+   * memory stays flat regardless of event count.
+   */
+  attractMs: number;
 }
 
 /**
@@ -201,6 +209,13 @@ export interface ReportStats {
   uptime: UptimeStats;
   /** uptimeMs as a % of (uptimeMs + downtimeMs) over monitored spans only, 0..100; null when there are none */
   uptimePct: number | null;
+  /** count of `attract_start` events (attract loop runs) in scope */
+  attractStarts: number;
+  /** count of `attract_end` events (loops ended by a wake tap, as opposed to kiosk_stop/kiosk_start/app_resume) in scope */
+  attractEnds: number;
+  /** attractEnds / attractStarts * 100, 0..100; null when attractStarts is 0. The "pull-in rate": of
+   * every attract loop that ran, the share a visitor actually walked up and tapped to end. */
+  attractPullInPct: number | null;
 }
 
 function emptyUptime(): UptimeStats {
@@ -419,6 +434,9 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       totalPaths: 0,
       uptime: emptyUptime(),
       uptimePct: null,
+      attractStarts: 0,
+      attractEnds: 0,
+      attractPullInPct: null,
     };
   }
 
@@ -462,6 +480,14 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
   let dwellCountAll = 0;
   let totalNavTaps = 0;
   const slideViewCounts = new Map<number, number>();
+
+  // ---- attract loop (feature F) ----
+  let attractStarts = 0;
+  let attractEnds = 0;
+  let openAttractFromMs: number | null = null;
+  // Closed periods only (not raw events), so memory stays flat regardless of event count;
+  // clipped into per-bucket attractMs below once bucketMs/startMs/numBuckets are known.
+  const attractPeriods: { fromMs: number; toMs: number }[] = [];
 
   // open visits: visit_id -> { buttonId, ts }
   const openVisits = new Map<string, { buttonId: string; ts: string }>();
@@ -546,6 +572,30 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
     // later return_home, so close it now as an orphan (see closeVisitOrphaned).
     if (ev.event === 'app_resume' || ev.event === 'kiosk_start' || ev.event === 'kiosk_stop') {
       for (const id of Array.from(openVisitPaths.keys())) closeVisitOrphaned(id);
+    }
+
+    // attract loop (feature F): a period runs from attract_start to the next attract_end,
+    // or to kiosk_stop/kiosk_start/app_resume, or (handled after the loop) the end of the
+    // log, whichever comes first (see ReportStats.attractStarts doc comment / SPEC).
+    if (ev.event === 'attract_start') {
+      attractStarts += 1;
+      const ms = parseTs(ev.ts);
+      // Defensive: a second attract_start with no closing event in between (shouldn't happen
+      // on a real kiosk) closes the previous period here first, so periods never overlap.
+      if (openAttractFromMs !== null) attractPeriods.push({ fromMs: openAttractFromMs, toMs: ms });
+      openAttractFromMs = ms;
+    } else if (ev.event === 'attract_end') {
+      attractEnds += 1;
+      if (openAttractFromMs !== null) {
+        attractPeriods.push({ fromMs: openAttractFromMs, toMs: parseTs(ev.ts) });
+        openAttractFromMs = null;
+      }
+    } else if (
+      (ev.event === 'kiosk_start' || ev.event === 'kiosk_stop' || ev.event === 'app_resume') &&
+      openAttractFromMs !== null
+    ) {
+      attractPeriods.push({ fromMs: openAttractFromMs, toMs: parseTs(ev.ts) });
+      openAttractFromMs = null;
     }
 
     if (ev.event === 'button_press' && ev.button_id) {
@@ -672,6 +722,30 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
   // killed, or the log/export scope simply ends mid-visit), so orphan it too.
   for (const id of Array.from(openVisitPaths.keys())) closeVisitOrphaned(id);
 
+  // An attract period still open at the end of the log (no attract_end, kiosk_stop,
+  // kiosk_start or app_resume came after it in scope) closes at the log's own last event.
+  if (openAttractFromMs !== null) {
+    attractPeriods.push({ fromMs: openAttractFromMs, toMs: parseTs(lastTs) });
+  }
+
+  // Clip each attract period into the buckets it overlaps, so ActivityBucket.attractMs stays
+  // a single number per bucket rather than growing with the number of attract periods.
+  const bucketAttractMs = new Array<number>(numBuckets).fill(0);
+  const scopeEndMs = startMs + numBuckets * bucketMs;
+  for (const period of attractPeriods) {
+    const from = Math.max(period.fromMs, startMs);
+    const to = Math.min(period.toMs, scopeEndMs);
+    if (!(to > from)) continue;
+    const firstIdx = Math.min(numBuckets - 1, Math.max(0, Math.floor((from - startMs) / bucketMs)));
+    const lastIdx = Math.min(numBuckets - 1, Math.max(0, Math.floor((to - startMs - 1) / bucketMs)));
+    for (let i = firstIdx; i <= lastIdx; i++) {
+      const bucketStart = startMs + i * bucketMs;
+      const bucketEnd = bucketStart + bucketMs;
+      const overlap = Math.min(to, bucketEnd) - Math.max(from, bucketStart);
+      if (overlap > 0) bucketAttractMs[i] += overlap;
+    }
+  }
+
   // overall average dwell = matched (per-button) dwell + orphan-return dwell
   let matchedDwellSum = 0;
   let matchedDwellCount = 0;
@@ -709,7 +783,7 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       obj[id] = c;
       total += c;
     }
-    return { start, end, counts: obj, total };
+    return { start, end, counts: obj, total, attractMs: bucketAttractMs[i] };
   });
 
   const isMultiDay = dayKeysSeen.size > 1;
@@ -741,6 +815,7 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
 
   const uptime = computeUptime(sorted);
   const uptimePct = uptimePctOf(uptime);
+  const attractPullInPct = attractStarts > 0 ? (attractEnds / attractStarts) * 100 : null;
 
   return {
     sessionId,
@@ -766,5 +841,8 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
     totalPaths,
     uptime,
     uptimePct,
+    attractStarts,
+    attractEnds,
+    attractPullInPct,
   };
 }

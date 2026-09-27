@@ -80,4 +80,31 @@ describe('validateConfig', () => {
     expect(validateConfig({ ...defaultConfig('deck.pptx'), glow: { ...glow, periodMs: 100 } }).length).toBe(1);
     expect(validateConfig({ ...defaultConfig('deck.pptx'), glow: { ...glow, enabled: false, color: 'gold' } })).toEqual([]);
   });
+
+  it('validates the attract loop only when it is on', () => {
+    const attract = { enabled: true, idleSec: 60, mode: 'cycle' as const, slides: [2], slideSec: 6 };
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), attract })).toEqual([]);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), attract: { ...attract, enabled: false, idleSec: 1 } })).toEqual([]);
+  });
+
+  it('rejects an out-of-range attract idle time, only when enabled', () => {
+    const attract = { enabled: true, idleSec: 60, mode: 'cycle' as const, slides: [], slideSec: 6 };
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), attract: { ...attract, idleSec: 14 } }).length).toBe(1);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), attract: { ...attract, idleSec: 601 } }).length).toBe(1);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), attract: { ...attract, idleSec: 15 } })).toEqual([]);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), attract: { ...attract, idleSec: 600 } })).toEqual([]);
+  });
+
+  it('rejects an out-of-range attract seconds-per-slide', () => {
+    const attract = { enabled: true, idleSec: 60, mode: 'cycle' as const, slides: [], slideSec: 6 };
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), attract: { ...attract, slideSec: 2 } }).length).toBe(1);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), attract: { ...attract, slideSec: 61 } }).length).toBe(1);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), attract: { ...attract, slideSec: 3 } })).toEqual([]);
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), attract: { ...attract, slideSec: 60 } })).toEqual([]);
+  });
+
+  it('rejects an attract mode outside cycle/pulse', () => {
+    const attract = { enabled: true, idleSec: 60, mode: 'bogus' as unknown as 'cycle', slides: [], slideSec: 6 };
+    expect(validateConfig({ ...defaultConfig('deck.pptx'), attract }).length).toBe(1);
+  });
 });

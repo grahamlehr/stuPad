@@ -70,8 +70,8 @@ requestPersistence(): Promise<boolean>
 export class KioskController {
   constructor(opts: { root: HTMLElement; deck: Deck; config: KioskConfig; sessionId: string;
                       log: (e: Omit<LogEvent,'ts'|'session_id'>) => void; onAdminRequested: () => void });
-  start(): Promise<void>;  // renders home, binds input, wake lock, logs nothing (caller logs kiosk_start / app_resume)
-  stop(): void;            // unbinds everything, releases wake lock, destroys stage
+  start(): Promise<void>;  // renders home, binds input, wake lock, arms the attract idle timer, logs nothing (caller logs kiosk_start / app_resume)
+  stop(): void;            // unbinds everything, clears every timer (destination + attract idle/cycle), releases wake lock, destroys stage
 }
 export class SecretSequenceDetector {
   constructor(pattern: SecretPattern, windowMs: number, cornerFraction = 0.12);
@@ -81,8 +81,11 @@ export class SecretSequenceDetector {
 }
 export function checklist(): string[];                   // operator checklist text shown at Go live
 export async function acquireWakeLock(): Promise<boolean>; // one-shot probe (acquire then release) so Setup can warn; the controller holds its own long-lived lock
+export const ATTRACT_CROSSFADE_MS: number;                // fixed crossfade length for every attract-cycle step, independent of config.transitionMs
 // also exported for tests and reuse: pointInRect, round1, cornerOf
 ```
+
+Mode is now `'home' | 'destination' | 'attract'`. The attract loop (config: `KioskConfig.attract`, off by default): an idle timer (`config.attract.idleSec`) armed whenever the kiosk is on Home and idle (after `start()`, an accepted Home tap that doesn't leave Home, a return to Home, or a wake from attract; cleared on leaving Home and in `stop()`) starts it, logging `attract_start`. **Cycle** mode crossfades `stage.show()` through Home plus `config.attract.slides` (filtered to slides that exist in the deck, deduped, sorted, Home first) via a single `setTimeout` chain at `ATTRACT_CROSSFADE_MS`, staying `config.attract.slideSec` on each; it falls back to **pulse** mode (stay on Home, toggle the `kiosk-attract-pulse` class built once lazily, reusing `glow.ts` for a stronger always-visible glow) when there's nothing else to cycle. The first tap in attract mode, wherever it lands, only wakes the kiosk (`wakeFromAttract`): never a button press, never a `miss_tap`, logs `attract_end` with `dwell_ms`, and re-arms the idle timer. The secret sequence is still checked first in every mode.
 
 `src/kiosk/glow.ts` (button glow, also used by the Setup preview):
 
@@ -93,7 +96,7 @@ glowStyle(cfg: GlowConfig)                       // shadow colour, blur/spread (
 applyGlowStyle(el, cfg); createGlow(target); createGlowLayer(deck, slide, cfg): HTMLElement
 ```
 
-Only `pointerdown` is used for taps, so the 150 ms tap-to-slide budget is not spent waiting for a click. Kiosk rules (SPEC "Kiosk mode behaviour"): secret sequence checked before normal handling (taps that continue or complete a sequence are consumed and never trigger buttons; a sequence's first corner tap is handled normally); home: button hit → `button_press` + new visit_id + transition; else `miss_tap` with x/y %; destination: home-link hit → `return_home`, else a back-link hit (deck.backLinks) → `slide_nav` to the previous slide of this visit (a per-visit history, cleared on return home), or `return_home` if the visit started on this slide, else a nav-link hit (deck.navLinks for the current slide) → `slide_nav` + move to the target slide (still destination mode: fallback Home button and timeout are re-applied for the new slide) → else tap-anywhere / timeout → `return_home` with method + dwell_ms (the whole visit's dwell, from the first button press, not just the last slide); `slide_nav`'s own dwell_ms is just the time on the slide being left; timeout resets on any tap, including a nav tap; debounce ignores repeat taps (not logged); idle warning countdown in last 5 s; press feedback; disable gestures (touch-action, user-select, contextmenu, gesturestart, dblclick); visibilitychange re-acquires wake lock. If `returnMethods.homeButton` is on and a destination slide has no home link or back link (whether reached directly or via a chain of nav links), show a discreet ≥44pt "Home" overlay button so users are never stranded; the previous slide's fallback button (if any) is removed before drawing a new one.
+Only `pointerdown` is used for taps, so the 150 ms tap-to-slide budget is not spent waiting for a click. Kiosk rules (SPEC "Kiosk mode behaviour"): secret sequence checked before normal handling (taps that continue or complete a sequence are consumed and never trigger buttons; a sequence's first corner tap is handled normally); home: button hit → `button_press` + new visit_id + transition; else `miss_tap` with x/y %; destination: home-link hit → `return_home`, else a back-link hit (deck.backLinks) → `slide_nav` to the previous slide of this visit (a per-visit history, cleared on return home), or `return_home` if the visit started on this slide, else a nav-link hit (deck.navLinks for the current slide) → `slide_nav` + move to the target slide (still destination mode: fallback Home button and timeout are re-applied for the new slide) → else tap-anywhere / timeout → `return_home` with method + dwell_ms (the whole visit's dwell, from the first button press, not just the last slide); `slide_nav`'s own dwell_ms is just the time on the slide being left; timeout resets on any tap, including a nav tap; debounce ignores repeat taps (not logged); idle warning countdown in last 5 s; press feedback; disable gestures (touch-action, user-select, contextmenu, gesturestart, dblclick); visibilitychange re-acquires wake lock. If `returnMethods.homeButton` is on and a destination slide has no home link or back link (whether reached directly or via a chain of nav links), show a discreet ≥44pt "Home" overlay button so users are never stranded; the previous slide's fallback button (if any) is removed before drawing a new one. Attract mode: any accepted tap → `wakeFromAttract`, never a button press or `miss_tap`, logs `attract_end` + dwell_ms, back to home mode, idle timer re-armed.
 
 ### Report API (`src/report/index.ts`)
 
@@ -121,13 +124,21 @@ computeStats(events: LogEvent[], labels: Record<string,string>): ReportStats  //
 //   unmonitoredMs instead of uptimeMs/downtimeMs/gaps. Inside a monitored span, a gap over UPTIME_GAP_MS
 //   (20 min) between consecutive events is downtime, everything else is uptime. heartbeat events take
 //   part in this pass, and extend firstTs/lastTs like any event, but never affect isMultiDay or any count.
-toCsv(events): string; csvFileName(sessionName, now): string   // heartbeat rows included like any other event, no extra columns
-buildPdf(events, deck, config, homeThumbPng?: Blob): Promise<Blob>   // A4 landscape, pages per SPEC; jsPDF is lazy-imported; config.deviceName (trimmed), when set, is shown on Summary and in every footer
+// ReportStats.attractStarts / attractEnds: number   // attract_start / attract_end event counts in scope
+// ReportStats.attractPullInPct: number | null       // attractEnds / attractStarts * 100; null when attractStarts is 0
+//   Attract periods (folded into the same single pass): attract_start opens one, closed by the next
+//   attract_end, or by whichever of kiosk_stop/kiosk_start/app_resume comes first, or by the end of the
+//   log. Only closed { fromMs, toMs } periods are kept; each is clipped into the ActivityBucket(s) it
+//   overlaps once bucket sizing is known, so memory stays flat regardless of event count.
+// ActivityBucket.attractMs: number   // ms of this bucket's own span spent in an attract period, clipped to it
+toCsv(events): string; csvFileName(sessionName, now): string   // heartbeat/attract_start/attract_end rows included like any other event, no extra columns
+buildPdf(events, deck, config, homeThumbPng?: Blob): Promise<Blob>   // A4 landscape, pages per SPEC; jsPDF is lazy-imported; config.deviceName (trimmed), when set, is shown on Summary and in every footer; Summary gains an "Attract pull-in" tile once attractStarts > 0
 pdfFileName(sessionName, now): string                                // same <session>_<yyyy-mm-dd-hhmm> pattern as csvFileName
 exportFile(file: File): Promise<'shared'|'downloaded'|'cancelled'>   // navigator.share({files}) → fallback <a download>
 buttonColor(i: number): string    // consistent palette across all charts
 returnMethodColor(m: ReturnMethod): string        // in src/report/colors.ts; not re-exported from index.ts
 draw*Chart(ctx, width, height, data, fontScale?)  // donut, dwell bar, activity, bar, percent bar, heatmap: hand-drawn canvas charts (src/report/charts.ts)
+drawActivityChart(ctx, w, h, { buckets: { label, counts, attractMs? }[], series, bucketMs? }, fontScale?)  // stacked bars; a light shaded band behind a bucket with attractMs, opacity scaled by attractMs / bucketMs (src/report/charts.ts); ATTRACT_BAND_LEGEND_COLOR is the matching PDF legend swatch
 drawTapHeatmap(ctx, w, h, { grid, buttons, deckHeight, thumbnail? }, fontScale?)  // home-slide miss-tap grid + button outlines, thumbnail optional (src/report/charts.ts)
 drawSlideTimeChart(ctx, w, h, { entries: { slide, medianMs, medianMsExclTimeout }[] }, fontScale?)  // paired horizontal bars, median time per slide; caps at the 16 busiest slides (by stays, then ascending slide order) with a "+N more" note (src/report/charts.ts)
 drawPathTable(ctx, w, h, { entries: { path, count, pct, ended, label? }[] }, fontScale?)  // "3 → 4 → 5" style table drawn on canvas, so the arrow renders (jsPDF's Helvetica can't); caller does the top-8/"Other" bucketing (src/report/charts.ts)

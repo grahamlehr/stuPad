@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
-import type { Deck, KioskConfig, LogEvent } from '../../src/types';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Deck, KioskConfig, LogEvent, Slide } from '../../src/types';
 import { defaultConfig, SLIDE_W } from '../../src/types';
 
 // -------------------------------------------------------------- mock render
@@ -53,7 +55,7 @@ vi.mock('../../src/render', () => {
 });
 
 // Imported after the mock so KioskController picks up the mocked SlideStage.
-const { KioskController } = await import('../../src/kiosk/index');
+const { KioskController, ATTRACT_CROSSFADE_MS } = await import('../../src/kiosk/index');
 
 // ------------------------------------------------------------------- fixtures
 
@@ -586,5 +588,258 @@ describe('KioskController: "Last Slide Viewed" back links', () => {
     await makeTermsController();
     tap(root, BUTTON_2.x, BUTTON_2.y); // -> 4
     expect(lastStage!.overlay.querySelectorAll('.kiosk-fallback-home').length).toBe(0);
+  });
+});
+
+describe('KioskController: attract loop', () => {
+  let root: HTMLElement;
+  let logs: Omit<LogEvent, 'ts' | 'session_id'>[];
+  let onAdminRequested: Mock<() => void>;
+  let controller: InstanceType<typeof KioskController>;
+
+  function fakeSlide(index: number): Slide {
+    return { index, background: { type: 'none' }, elements: [] };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    logs = [];
+    onAdminRequested = vi.fn<() => void>();
+  });
+
+  afterEach(() => {
+    controller?.stop();
+    root.remove();
+    vi.useRealTimers();
+  });
+
+  /** Builds and starts a controller with the attract loop configured; every other config field
+   * comes from `fakeConfig` unless overridden. */
+  async function makeAttractController(
+    cfgOver: Partial<KioskConfig> = {},
+    attractOver: Partial<KioskConfig['attract']> = {},
+    deckOver?: Deck,
+  ): Promise<InstanceType<typeof KioskController>> {
+    controller = new KioskController({
+      root,
+      deck: deckOver ?? fakeDeck(),
+      config: fakeConfig({
+        attract: { enabled: true, idleSec: 5, mode: 'pulse', slides: [], slideSec: 4, ...attractOver },
+        ...cfgOver,
+      }),
+      sessionId: 'sess-1',
+      log: (e) => logs.push(e),
+      onAdminRequested,
+    });
+    await controller.start();
+    return controller;
+  }
+
+  it('is off by default: idling on Home never starts the loop', async () => {
+    controller = new KioskController({
+      root,
+      deck: fakeDeck(),
+      config: fakeConfig(), // attract.enabled: false, per defaultConfig
+      sessionId: 'sess-1',
+      log: (e) => logs.push(e),
+      onAdminRequested,
+    });
+    await controller.start();
+    logs.length = 0;
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(logs.some((l) => l.event === 'attract_start')).toBe(false);
+    expect(root.classList.contains('kiosk-attract-pulse')).toBe(false);
+  });
+
+  it('starts after idleSec of no accepted taps on Home', async () => {
+    await makeAttractController();
+    logs.length = 0;
+    vi.advanceTimersByTime(4999);
+    expect(logs).toHaveLength(0);
+    vi.advanceTimersByTime(1);
+    expect(logs.map((l) => l.event)).toEqual(['attract_start']);
+  });
+
+  it('a miss tap on Home re-arms the idle timer instead of leaving the old one running', async () => {
+    await makeAttractController();
+    logs.length = 0;
+    vi.advanceTimersByTime(4000);
+    tap(root, MISS.x, MISS.y); // miss_tap, still activity: re-arms for another 5s from here
+    expect(logs.map((l) => l.event)).toEqual(['miss_tap']);
+
+    vi.advanceTimersByTime(4999);
+    expect(logs.some((l) => l.event === 'attract_start')).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(logs.at(-1)?.event).toBe('attract_start');
+  });
+
+  it('a tap in attract mode wakes the kiosk without pressing a button or logging miss_tap, even directly over a button', async () => {
+    await makeAttractController();
+    vi.advanceTimersByTime(5000);
+    logs.length = 0;
+
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // sits inside b1's bounds
+
+    expect(logs).toHaveLength(1);
+    expect(logs[0].event).toBe('attract_end');
+    expect(typeof logs[0].dwell_ms).toBe('number');
+    // Never navigated to b1's target (slide 2): the tap only woke the kiosk.
+    expect(lastStage!.showCalls.every((c) => c.index !== 2)).toBe(true);
+  });
+
+  it('a destination visit clears the idle timer, so it never starts attract behind an open visit', async () => {
+    await makeAttractController(
+      { timeoutSec: null, returnMethods: { homeButton: true, tapAnywhere: false, timeout: false } },
+      { idleSec: 3 },
+    );
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> destination slide 2
+    logs.length = 0;
+
+    vi.advanceTimersByTime(10_000); // would have started attract if the Home idle timer weren't cleared
+    expect(logs.some((l) => l.event === 'attract_start')).toBe(false);
+  });
+
+  it('returning home re-arms the idle timer', async () => {
+    await makeAttractController(
+      { timeoutSec: null, returnMethods: { homeButton: true, tapAnywhere: false, timeout: false } },
+      { idleSec: 3 },
+    );
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> destination slide 2
+    vi.advanceTimersByTime(150); // clear debounce
+    tap(root, HOME_LINK_POINT.x, HOME_LINK_POINT.y); // -> back home
+    logs.length = 0;
+
+    vi.advanceTimersByTime(3000);
+    expect(logs.map((l) => l.event)).toEqual(['attract_start']);
+  });
+
+  it('the secret sequence still completes while in attract mode', async () => {
+    await makeAttractController({ secretPattern: 'corners_cw', secretWindowMs: 5000 });
+    vi.advanceTimersByTime(5000); // -> attract
+    logs.length = 0;
+
+    // The corner sequence's first tap also happens to be the tap that wakes the kiosk (the
+    // wake tap and the sequence's own first step are the same physical tap); every following
+    // corner tap is consumed by the detector as normal, and the sequence still completes.
+    tap(root, TL.x, TL.y);
+    tap(root, TR.x, TR.y);
+    tap(root, BR.x, BR.y);
+    tap(root, BL.x, BL.y);
+
+    expect(onAdminRequested).toHaveBeenCalledTimes(1);
+    expect(logs.some((l) => l.event === 'button_press')).toBe(false);
+    expect(logs.some((l) => l.event === 'miss_tap')).toBe(false);
+    expect(logs.filter((l) => l.event === 'attract_end')).toHaveLength(1);
+  });
+
+  it('cycle mode advances every slideSec and wraps back to Home', async () => {
+    const deck = fakeDeck();
+    deck.slides = [fakeSlide(1), fakeSlide(2), fakeSlide(3)];
+    await makeAttractController({}, { mode: 'cycle', slides: [2, 3], slideSec: 4 }, deck);
+    logs.length = 0;
+
+    vi.advanceTimersByTime(5000); // idle -> attract_start; cycle stays on Home until the first step
+    expect(logs.map((l) => l.event)).toEqual(['attract_start']);
+
+    vi.advanceTimersByTime(4000); // first step -> slide 2
+    expect(lastStage!.showCalls.at(-1)).toMatchObject({ index: 2, transition: { type: 'fade', ms: ATTRACT_CROSSFADE_MS } });
+
+    vi.advanceTimersByTime(4000); // -> slide 3
+    expect(lastStage!.showCalls.at(-1)?.index).toBe(3);
+
+    vi.advanceTimersByTime(4000); // wraps back to Home
+    expect(lastStage!.showCalls.at(-1)).toMatchObject({ index: 1, transition: { type: 'fade', ms: ATTRACT_CROSSFADE_MS } });
+  });
+
+  it('cycle mode with nothing else to cycle behaves like pulse mode', async () => {
+    // config.attract.slides names slides that don't exist in this deck, so cycleSlides
+    // collapses to just [1] (Home), with nothing to crossfade to.
+    await makeAttractController({}, { mode: 'cycle', slides: [2, 3], slideSec: 4 });
+    vi.advanceTimersByTime(5000);
+    expect(root.classList.contains('kiosk-attract-pulse')).toBe(true);
+  });
+
+  it('pulse mode toggles the kiosk-attract-pulse class on start and on wake', async () => {
+    await makeAttractController();
+    expect(root.classList.contains('kiosk-attract-pulse')).toBe(false);
+
+    vi.advanceTimersByTime(5000);
+    expect(root.classList.contains('kiosk-attract-pulse')).toBe(true);
+
+    // The class is toggled on the controller's own root (not some other ancestor such as
+    // App's outer .kiosk-root), which is what styles.css's `.kiosk-attract-pulse
+    // .kiosk-attract-pulse-layer` descendant selector (no `.kiosk-root` prefix) actually
+    // matches against. Regression guard for a bug where the CSS wrongly required both
+    // classes on the same element.
+    const layer = lastStage!.overlay.querySelector('.kiosk-attract-pulse-layer')!;
+    expect(layer.closest('.kiosk-attract-pulse')).toBe(root);
+    expect(layer.matches('.kiosk-attract-pulse .kiosk-attract-pulse-layer')).toBe(true);
+
+    tap(root, MISS.x, MISS.y); // any tap wakes
+    expect(root.classList.contains('kiosk-attract-pulse')).toBe(false);
+  });
+
+  it('a wake tap mid-cycle-crossfade lands on Home, shows only Home\'s glow, and logs one attract_end with no button press', async () => {
+    const deck = fakeDeck();
+    deck.slides = [fakeSlide(1), fakeSlide(2)];
+    await makeAttractController(
+      { glow: { enabled: true, color: '#ffffff', intensity: 5, periodMs: 2000 } },
+      { mode: 'cycle', slides: [2], slideSec: 4 },
+      deck,
+    );
+    logs.length = 0;
+
+    vi.advanceTimersByTime(5000); // idle -> attract_start, cycle running on Home
+    vi.advanceTimersByTime(4000); // first cycle step: crossfade under way to slide 2
+    expect(lastStage!.showCalls.at(-1)?.index).toBe(2);
+    logs.length = 0;
+
+    // The wake tap arrives before the crossfade's own timer would have settled it.
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // sits inside b1's bounds
+
+    expect(lastStage!.current).toBe(1);
+    expect(logs.map((l) => l.event)).toEqual(['attract_end']);
+    expect(logs.some((l) => l.event === 'button_press')).toBe(false);
+
+    const visibleLayers = Array.from(
+      lastStage!.overlay.querySelectorAll<HTMLElement>('.kiosk-glow-layer'),
+    ).filter((l) => l.style.display !== 'none');
+    expect(visibleLayers).toHaveLength(1);
+    expect(visibleLayers[0].querySelector('.kiosk-glow')).not.toBeNull(); // Home's own glow
+  });
+
+  it('stop() clears every attract timer and the pulse class, leaving nothing pending', async () => {
+    const deck = fakeDeck();
+    deck.slides = [fakeSlide(1), fakeSlide(2)];
+    await makeAttractController({}, { mode: 'cycle', slides: [2], slideSec: 4 }, deck);
+    vi.advanceTimersByTime(5000); // idle -> attract_start, cycle running (one pending timer)
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    controller.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(root.classList.contains('kiosk-attract-pulse')).toBe(false);
+  });
+
+  it('stop() while pulsing removes the class and leaves no pending timers', async () => {
+    await makeAttractController();
+    vi.advanceTimersByTime(5000);
+    expect(root.classList.contains('kiosk-attract-pulse')).toBe(true);
+
+    controller.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(root.classList.contains('kiosk-attract-pulse')).toBe(false);
+  });
+});
+
+describe('styles.css: kiosk-attract-pulse selector', () => {
+  it('never requires .kiosk-root together with .kiosk-attract-pulse on the same element', () => {
+    // kiosk-attract-pulse is toggled on the controller's own root (the stage host div inside
+    // App's kioskRoot, not kioskRoot itself), so a compound selector like
+    // `.kiosk-root.kiosk-attract-pulse ...` would never match in production. Guards against
+    // that regression regardless of which rule (or a future one) it might sneak back into.
+    const css = fs.readFileSync(path.resolve(__dirname, '../../src/styles.css'), 'utf8');
+    expect(css).not.toContain('.kiosk-root.kiosk-attract-pulse');
   });
 });

@@ -108,7 +108,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 
 **Docs.** SPEC "Fonts" (embedded fonts now honoured), README deck rules, ARCHITECTURE parser and render sections, and ARCHITECTURE known gaps (remove the entry).
 
-## F. Attract loop (item 5)
+## F. Attract loop (item 5) (done in 1.6.0)
 
 **Goal.** Draw people in when nobody has touched the kiosk for a while.
 
