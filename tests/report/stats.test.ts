@@ -899,3 +899,106 @@ describe('computeStats: uptime', () => {
     expect(b.uptime.uptimeMs).toBeGreaterThan(0);
   });
 });
+
+function attractStart(ts: string): LogEvent {
+  return { ts, session_id: SID, event: 'attract_start' };
+}
+
+function attractEnd(ts: string, dwellMs: number): LogEvent {
+  return { ts, session_id: SID, event: 'attract_end', dwell_ms: dwellMs };
+}
+
+describe('computeStats: attract loop', () => {
+  it('empty log has zero attract counts and a null pull-in pct', () => {
+    const stats = computeStats([], {});
+    expect(stats.attractStarts).toBe(0);
+    expect(stats.attractEnds).toBe(0);
+    expect(stats.attractPullInPct).toBeNull();
+    expect(stats.buckets).toEqual([]);
+  });
+
+  it('counts starts and ends, and computes the pull-in percentage (ends / starts)', () => {
+    const events = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      attractStart('2026-10-14T09:01:00.000+00:00'),
+      attractEnd('2026-10-14T09:01:30.000+00:00', 30_000),
+      attractStart('2026-10-14T09:02:00.000+00:00'),
+      attractEnd('2026-10-14T09:02:20.000+00:00', 20_000),
+      attractStart('2026-10-14T09:03:00.000+00:00'), // never ended by a tap: kiosk_stop below ends it
+      kioskEvent('kiosk_stop', '2026-10-14T09:03:30.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.attractStarts).toBe(3);
+    expect(stats.attractEnds).toBe(2);
+    expect(stats.attractPullInPct).toBeCloseTo((2 / 3) * 100);
+  });
+
+  it('an attract period is clipped into the bucket(s) it overlaps', () => {
+    const events = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      attractStart('2026-10-14T09:07:00.000+00:00'),
+      attractEnd('2026-10-14T09:09:00.000+00:00', 120_000),
+      kioskEvent('kiosk_stop', '2026-10-14T09:20:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.bucketMinutes).toBe(5); // a 20-minute range fits the finest (5-min) candidate
+    // The 2-minute period (09:07-09:09) sits entirely inside the 09:05-09:10 bucket (index 1).
+    expect(stats.buckets.map((b) => b.attractMs)).toEqual([0, 120_000, 0, 0, 0]);
+  });
+
+  it('a period spanning a bucket boundary is split proportionally across both buckets', () => {
+    const events = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      attractStart('2026-10-14T09:04:00.000+00:00'), // 1 min left in the first 5-min bucket
+      attractEnd('2026-10-14T09:07:00.000+00:00', 180_000), // 2 min into the second bucket
+      kioskEvent('kiosk_stop', '2026-10-14T09:10:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.bucketMinutes).toBe(5);
+    // First 5-min bucket (09:00-09:05) gets the 1 minute before the boundary; the second
+    // (09:05-09:10) gets the 2 minutes after it. Any further (empty) trailing bucket is 0.
+    expect(stats.buckets.slice(0, 2).map((b) => b.attractMs)).toEqual([60_000, 120_000]);
+    expect(stats.buckets.slice(2).every((b) => b.attractMs === 0)).toBe(true);
+  });
+
+  it('a period with no attract_end closes at the next kiosk_stop, not at the end of the log', () => {
+    const events = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      attractStart('2026-10-14T09:02:00.000+00:00'),
+      kioskEvent('kiosk_stop', '2026-10-14T09:04:00.000+00:00'),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.attractStarts).toBe(1);
+    expect(stats.attractEnds).toBe(0);
+    expect(stats.attractPullInPct).toBe(0);
+    const totalAttractMs = stats.buckets.reduce((s, b) => s + b.attractMs, 0);
+    expect(totalAttractMs).toBe(2 * 60_000); // 09:02 -> 09:04, where kiosk_stop closed it
+  });
+
+  it('a period with no closing event at all closes at the end of the log', () => {
+    const events = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      attractStart('2026-10-14T09:01:00.000+00:00'),
+      heartbeat('2026-10-14T09:03:00.000+00:00'), // last event in the log; doesn't close the period
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.attractStarts).toBe(1);
+    expect(stats.attractEnds).toBe(0);
+    const totalAttractMs = stats.buckets.reduce((s, b) => s + b.attractMs, 0);
+    expect(totalAttractMs).toBe(2 * 60_000); // 09:01 -> 09:03, the log's own last event
+  });
+
+  it('an attract_start while one is already open closes the previous one defensively', () => {
+    const events = [
+      kioskEvent('kiosk_start', '2026-10-14T09:00:00.000+00:00'),
+      attractStart('2026-10-14T09:01:00.000+00:00'),
+      attractStart('2026-10-14T09:02:00.000+00:00'), // shouldn't happen on a real kiosk
+      attractEnd('2026-10-14T09:02:30.000+00:00', 30_000),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.attractStarts).toBe(2);
+    expect(stats.attractEnds).toBe(1);
+    const totalAttractMs = stats.buckets.reduce((s, b) => s + b.attractMs, 0);
+    expect(totalAttractMs).toBe(90_000); // 09:01-09:02 (closed by the 2nd start) + 09:02-09:02:30
+  });
+});

@@ -187,6 +187,36 @@ describe('show() / current', () => {
     stage.destroy();
     vi.useRealTimers();
   });
+
+  it('a fade interrupting an in-flight fade settles the first fade instantly, then starts its own (the attract-loop wake case)', async () => {
+    // KioskController.wakeFromAttract calls stage.show(1, ...) with the kiosk's own fade
+    // transition, and this can land while an attract-cycle crossfade (a different fade, on
+    // its own fixed ATTRACT_CROSSFADE_MS) is still in flight. show() already handles a second
+    // call mid-fade generically (settleFade() runs at the top of every call), so no special
+    // handling was needed in the kiosk for this; this test documents that guarantee directly.
+    vi.useFakeTimers();
+    const d = deck({ slides: [slide({ index: 1 }), slide({ index: 2 })] });
+    const container = makeContainer();
+    const stage = new SlideStage(container, d);
+    const layers = Array.from(container.querySelectorAll('.sr-slide-layer'));
+
+    void stage.show(2, { type: 'fade', ms: 1000 }); // e.g. an attract-cycle step to slide 2
+    await vi.advanceTimersByTimeAsync(200); // mid-fade, not settled
+
+    const p = stage.show(1, { type: 'fade', ms: 300 }); // e.g. a wake tap fading back to Home
+    expect(stage.current).toBe(1);
+    // The interrupted cycle fade settled instantly (slide 2 fully shown, slide 1 hidden)
+    // before the wake's own fade started on top of it: never a stale half-transparent layer.
+    expect(isShowing(layers[1])).toBe(true);
+    expect(isShowing(layers[0])).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(300);
+    await p;
+    expect(isShowing(layers[0])).toBe(true);
+    expect(isShowing(layers[1])).toBe(false);
+    stage.destroy();
+    vi.useRealTimers();
+  });
 });
 
 describe('destroy()', () => {

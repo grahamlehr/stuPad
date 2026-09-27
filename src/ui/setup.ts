@@ -2,7 +2,7 @@
  * Setup screen: one scrolling screen with five steps (SPEC "Admin setup flow"):
  * Load -> Check -> Preview -> Configure -> Go live.
  */
-import type { Deck, Issue, KioskConfig, ButtonDef, Rect, GlowConfig } from '../types';
+import type { Deck, Issue, KioskConfig, ButtonDef, Rect, GlowConfig, AttractConfig } from '../types';
 import { defaultConfig, GLOW_INTENSITY_MIN, GLOW_INTENSITY_MAX, GLOW_PERIOD_MIN_MS, GLOW_PERIOD_MAX_MS } from '../types';
 import { parsePptx, validateDeck } from '../pptx';
 import { SlideStage, renderThumbnail, rasterizeDeck, releaseThumbnails } from '../render';
@@ -40,6 +40,18 @@ const TRANSITION_MS_OPTIONS = [150, 300, 500, 800];
 
 /** Options for the Secret exit sequence "Window" select (`KioskConfig.secretWindowMs`). */
 const SECRET_WINDOW_MS_OPTIONS = [3000, 5000, 8000, 10000];
+
+/** Options for the Attract loop "Idle time" select (`KioskConfig.attract.idleSec`). */
+const ATTRACT_IDLE_SEC_OPTIONS = [30, 60, 120, 300];
+/** Options for the Attract loop "Seconds per slide" select (`KioskConfig.attract.slideSec`, cycle mode only). */
+const ATTRACT_SLIDE_SEC_OPTIONS = [4, 6, 8, 12];
+
+/** Label for an idle-time value: seconds under a minute, else "N min". */
+function formatIdleSec(v: number): string {
+  if (v < 60) return `${v} s`;
+  const min = v / 60;
+  return `${Number.isInteger(min) ? min : min.toFixed(1)} min`;
+}
 
 /**
  * Describes what to tap for each `SecretPattern`, in the exact corner order the
@@ -532,6 +544,8 @@ export class SetupScreen {
 
       this.glowFields(cfg, update),
 
+      this.attractFields(cfg, update),
+
       h('h3', {}, ['Transition']),
       this.selectField(cfg.transition, ['none', 'fade'], (v) => update({ transition: v as KioskConfig['transition'] })),
       cfg.transition === 'fade'
@@ -664,6 +678,77 @@ export class SetupScreen {
       ]),
       h('p', { class: 'muted' }, ['The preview above shows the glow on the current slide.']),
     ]);
+  }
+
+  /**
+   * Attract loop: on/off, then (when on) idle time, mode, and in cycle mode a seconds-per-slide
+   * select plus a checkbox per slide 2..N to choose which slides are cycled. Home is always
+   * included and shown as a note rather than a checkbox, since it can't be removed.
+   */
+  private attractFields(cfg: KioskConfig, update: (p: Partial<KioskConfig>) => void): HTMLElement {
+    const attract = cfg.attract;
+    const setAttract = (patch: Partial<AttractConfig>) => update({ attract: { ...cfg.attract, ...patch } });
+
+    const toggle = this.checkboxField(
+      'Draw people in when nobody has touched the kiosk for a while',
+      attract.enabled,
+      (v) => setAttract({ enabled: v }),
+    );
+    if (!attract.enabled) return h('div', { class: 'attract-fields' }, [h('h3', {}, ['Attract loop']), toggle]);
+
+    const fields: HTMLElement[] = [
+      h('label', { class: 'field-row' }, [
+        h('span', {}, ['Idle time']),
+        this.numberSelectField(attract.idleSec, ATTRACT_IDLE_SEC_OPTIONS, (v) => setAttract({ idleSec: v }), formatIdleSec),
+      ]),
+      h('label', { class: 'field-row' }, [
+        h('span', {}, ['Mode']),
+        this.selectField(attract.mode, ['cycle', 'pulse'], (v) => setAttract({ mode: v as AttractConfig['mode'] }), {
+          cycle: 'Cycle slides',
+          pulse: 'Pulse on Home',
+        }),
+      ]),
+    ];
+
+    if (attract.mode === 'cycle' && this.deck) {
+      const otherSlides = this.deck.slides.filter((s) => s.index > 1);
+      fields.push(
+        h('label', { class: 'field-row' }, [
+          h('span', {}, ['Seconds per slide']),
+          this.numberSelectField(attract.slideSec, ATTRACT_SLIDE_SEC_OPTIONS, (v) => setAttract({ slideSec: v }), (v) => `${v} s`),
+        ]),
+        h('h4', {}, ['Slides to include']),
+        h('p', { class: 'muted' }, ['Home is always included.']),
+        otherSlides.length === 0
+          ? h('p', { class: 'muted' }, ['No other slides in this deck.'])
+          : h(
+              'div',
+              { class: 'attract-slide-grid' },
+              otherSlides.map((s) => {
+                const checked = attract.slides.includes(s.index);
+                return h('label', { class: 'attract-slide-check' }, [
+                  renderThumbnail(this.deck!, s.index, 100),
+                  h('span', {}, [
+                    h('input', {
+                      type: 'checkbox',
+                      checked,
+                      onchange: (e: Event) => {
+                        const on = (e.target as HTMLInputElement).checked;
+                        const slides = on
+                          ? [...attract.slides, s.index]
+                          : attract.slides.filter((n) => n !== s.index);
+                        setAttract({ slides });
+                      },
+                    }),
+                    ` Slide ${s.index}`,
+                  ]),
+                ]);
+              }),
+            ),
+      );
+    }
+
+    return h('div', { class: 'attract-fields' }, [h('h3', {}, ['Attract loop']), toggle, h('div', { class: 'field-list' }, fields)]);
   }
 
   private checkboxField(label: string, checked: boolean, onChange: (v: boolean) => void): HTMLElement {

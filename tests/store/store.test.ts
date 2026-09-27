@@ -91,6 +91,22 @@ describe('store: config migration', () => {
     const loaded = await store.loadConfig();
     expect(loaded?.deviceName).toBe('Stand A');
   });
+
+  it('defaults attract for a config saved before it existed', async () => {
+    const store = await freshStore();
+    const { attract: _attract, ...oldCfg } = defaultConfig('demo.pptx');
+    await store.saveConfig(oldCfg as KioskConfig);
+    const loaded = await store.loadConfig();
+    expect(loaded?.attract).toEqual({ enabled: false, idleSec: 60, mode: 'cycle', slides: [], slideSec: 6 });
+  });
+
+  it('leaves an explicitly-set attract config alone', async () => {
+    const store = await freshStore();
+    const cfg = { ...defaultConfig('demo.pptx'), attract: { enabled: true, idleSec: 30, mode: 'pulse' as const, slides: [2, 3], slideSec: 8 } };
+    await store.saveConfig(cfg);
+    const loaded = await store.loadConfig();
+    expect(loaded?.attract).toEqual({ enabled: true, idleSec: 30, mode: 'pulse', slides: [2, 3], slideSec: 8 });
+  });
 });
 
 describe('store: events CRUD and ordering', () => {
