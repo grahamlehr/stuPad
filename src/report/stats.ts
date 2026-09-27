@@ -110,7 +110,7 @@ export interface PollChoiceStat {
 }
 
 /**
- * Aggregate results for one poll (ROADMAP "Polls and ratings"), counting every vote —
+ * Aggregate results for one poll (ROADMAP "Polls and ratings"), counting every vote:
  * home-slide and destination-slide alike (decision 4). `kind` is `'rate'` only when every
  * option `computeStats` has seen for this poll (via `ComputeStatsOpts.pollOptions`) is
  * `'rate'`; a poll mixing `VOTE_`/`RATE_` (see `validateDeck`'s `poll_mixed_kind` warning) is

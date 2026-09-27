@@ -153,10 +153,10 @@ const POLL_NAME_RE = /^(vote|rate)_([^_]+)_(.+)$/i;
 /**
  * Detect `VOTE_`/`RATE_` shapes anywhere in the deck (SPEC "PowerPoint template rules"; see
  * `PollOptionDef`). Unlike buttons/nav links, poll options aren't restricted to the home
- * slide or destination slides — a poll can sit anywhere, including slide 1 alongside
+ * slide or destination slides: a poll can sit anywhere, including slide 1 alongside
  * buttons. A group named `VOTE_.../RATE_...` is one option (its own bounds; children are
  * not also listed). `kind` is always the shape's own prefix, even when a poll mixes
- * `VOTE_`/`RATE_` across its options — `validateDeck` raises `poll_mixed_kind` for that, and
+ * `VOTE_`/`RATE_` across its options; `validateDeck` raises `poll_mixed_kind` for that, and
  * report code (see `src/report/stats.ts`) decides the poll's overall kind from every option.
  */
 export function detectPollOptions(slides: { index: number; elements: SlideElement[] }[]): PollOptionDef[] {

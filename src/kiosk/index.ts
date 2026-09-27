@@ -242,6 +242,14 @@ export class KioskController {
   /** Poll option lookup, precomputed once so a tap is just a filter + hit test (no scan of
    * `deck.pollOptions` itself, and no DOM work). */
   private readonly pollOptionsBySlide = new Map<number, PollOptionDef[]>();
+  /**
+   * Ids of `deck.buttons` (home-slide shapes with a link to a later slide), precomputed once.
+   * A Home poll option's own `linked` flag is true for *any* link, including one to slide 1
+   * or a "Last Slide Viewed" back link, neither of which `detectButtons` treats as a button
+   * (it requires `targetSlide > 1`). So whether a Home poll option takes the button path is
+   * decided by button membership (`homeButtonIds.has(opt.id)`), not by `opt.linked`.
+   */
+  private readonly homeButtonIds = new Set<string>();
   /** Polls already voted in during the current visit (SPEC: one vote per poll per visit).
    * Cleared whenever a visit starts or ends, like `visitPath`. */
   private visitVotedPolls = new Set<string>();
@@ -310,6 +318,7 @@ export class KioskController {
       if (list) list.push(opt);
       else this.pollOptionsBySlide.set(opt.slide, [opt]);
     }
+    for (const b of opts.deck.buttons) this.homeButtonIds.add(b.id);
   }
 
   get wakeLockAvailable(): boolean {
@@ -439,14 +448,17 @@ export class KioskController {
   }
 
   private handleHomeTap(px: number, py: number, xPct: number, yPct: number, now: number): void {
-    // Poll options are tested before buttons (ROADMAP "Polls and ratings"). An *unlinked*
-    // option is never a button (detectButtons requires a link), so it would otherwise log a
-    // miss_tap; a *linked* option is also in deck.buttons, so hitTestButton below finds the
-    // same shape and the vote is logged right after button_press instead (see below).
+    // Poll options are tested before buttons (ROADMAP "Polls and ratings"). Whether an option
+    // takes the button path is decided by button membership (homeButtonIds), not by its own
+    // `linked` flag: `linked` is true for *any* link, including one to slide 1 or a "Last
+    // Slide Viewed" back link, neither of which detectButtons treats as a button (it requires
+    // targetSlide > 1). A non-button option would otherwise fall through to a miss_tap; a
+    // button option is also in deck.buttons, so hitTestButton below finds the same shape and
+    // its vote is logged right after button_press instead (see below).
     const homePolls = this.pollOptionsBySlide.get(1) ?? [];
-    const unlinkedPollHit = homePolls.find((o) => !o.linked && pointInRect(px, py, o.bounds));
-    if (unlinkedPollHit) {
-      this.handleHomeUnlinkedVote(unlinkedPollHit, now);
+    const nonButtonPollHit = homePolls.find((o) => !this.homeButtonIds.has(o.id) && pointInRect(px, py, o.bounds));
+    if (nonButtonPollHit) {
+      this.handleHomeUnlinkedVote(nonButtonPollHit, now);
       return;
     }
 
@@ -483,10 +495,10 @@ export class KioskController {
       visit_id: visitId,
     });
 
-    // A poll option that also has a link is a normal button (it's in deck.buttons too): log
+    // A poll option that is also a button (its id is in deck.buttons) is a normal button: log
     // its vote right after button_press, with the same visit_id, so "vote then see a
     // thank-you slide" needs no separate concept.
-    const linkedPollHit = homePolls.find((o) => o.linked && o.id === button.id);
+    const linkedPollHit = homePolls.find((o) => o.id === button.id);
     if (linkedPollHit) {
       this.visitVotedPolls.add(linkedPollHit.poll);
       this.log({
@@ -509,10 +521,10 @@ export class KioskController {
     this.startDestinationTimer();
   }
 
-  /** An unlinked poll/rating option tapped on Home: no visit to dedupe against, so a per-poll
-   * cooldown (`HOME_POLL_COOLDOWN_MS`) stands in for "one vote per visit". Press feedback and
-   * the Thanks overlay always show; the vote itself is only logged once the cooldown has
-   * passed, and never as a miss_tap. */
+  /** A poll/rating option tapped on Home that isn't also a button (see `homeButtonIds`): no
+   * visit to dedupe against, so a per-poll cooldown (`HOME_POLL_COOLDOWN_MS`) stands in for
+   * "one vote per visit". Press feedback and the Thanks overlay always show; the vote itself
+   * is only logged once the cooldown has passed, and never as a miss_tap. */
   private handleHomeUnlinkedVote(opt: PollOptionDef, now: number): void {
     const lastAt = this.homePollLastVoteAt.get(opt.poll);
     if (lastAt === undefined || now - lastAt >= HOME_POLL_COOLDOWN_MS) {

@@ -594,6 +594,51 @@ describe('SetupScreen: poll labels', () => {
     }
   });
 
+  it('updates the preview outline label in place as a poll label is typed, without a full re-render', async () => {
+    vi.useFakeTimers();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    try {
+      const saveConfig = vi.spyOn(store, 'saveConfig').mockResolvedValue();
+      const screen = new SetupScreen({ container, initialDeck: makePollDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+      await flushMicrotasks();
+
+      const inputs = Array.from(
+        container.querySelectorAll<HTMLInputElement>('[data-step="configure"] .field-list input[type="text"]'),
+      );
+      const happyInput = inputs.find((i) => i.value === 'Happy')!;
+      expect(happyInput).toBeTruthy();
+
+      // The preview is already showing slide 1 (the deck's Home poll option's own slide).
+      const outline = container.querySelector<HTMLElement>('.preview-stage .preview-poll-outline')!;
+      expect(outline).toBeTruthy();
+      expect(outline.querySelector('.preview-btn-label')?.textContent).toBe('Mood: Happy');
+
+      happyInput.value = 'Delighted';
+      happyInput.dispatchEvent(new Event('input'));
+
+      // Same input, same outline element: a typed edit refreshes only errors/Go-live, not a
+      // full render (which would replace the focused input and remount the preview).
+      expect(happyInput.isConnected).toBe(true);
+      expect(outline.isConnected).toBe(true);
+      expect(outline.querySelector('.preview-btn-label')?.textContent).toBe('Mood: Delighted');
+      expect(
+        container.querySelectorAll<HTMLInputElement>('[data-step="configure"] .field-list input[type="text"]')[
+          inputs.indexOf(happyInput)
+        ],
+      ).toBe(happyInput);
+
+      vi.advanceTimersByTime(400);
+      expect(saveConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ pollLabels: expect.objectContaining({ ['Mood\u0000Happy']: 'Delighted' }) }),
+      );
+      screen.destroy();
+    } finally {
+      container.remove();
+      vi.useRealTimers();
+    }
+  });
+
   it('shows an admin-renamed label from initialConfig.pollLabels', () => {
     const container = document.createElement('div');
     const initialConfig = { ...defaultConfig('deck.pptx'), pollLabels: { ['Mood\u0000Sad']: 'Unhappy' } };

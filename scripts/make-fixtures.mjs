@@ -559,7 +559,7 @@ function buildPollsDeck() {
   pptx.defineLayout({ name: 'STUPAD_16x9', width: 13.333, height: 7.5 });
   pptx.layout = 'STUPAD_16x9';
 
-  // ---- Slide 1: Home - 2 buttons plus an unlinked VOTE_Mood_* poll ----
+  // ---- Slide 1: Home, 2 buttons plus an unlinked VOTE_Mood_* poll ----
   const home = pptx.addSlide();
   home.background = { color: NAVY };
   home.addText('Polls fixture', {

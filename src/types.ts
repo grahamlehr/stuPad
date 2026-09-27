@@ -232,7 +232,7 @@ export interface BackLinkDef {
  * a choice name may (everything after that). `kind` reflects the shape's own prefix
  * (`VOTE_` or `RATE_`, case-insensitive); when a poll mixes both prefixes across its
  * options, callers (see `src/report/stats.ts`) treat the whole poll as `'vote'` and
- * `validateDeck` raises a `poll_mixed_kind` warning — `kind` here is never rewritten.
+ * `validateDeck` raises a `poll_mixed_kind` warning; `kind` here is never rewritten.
  */
 export interface PollOptionDef {
   slide: number;

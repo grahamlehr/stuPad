@@ -1024,6 +1024,46 @@ describe('KioskController: polls and ratings', () => {
     expect(logs[1].visit_id).toBe(logs[0].visit_id);
   });
 
+  it('a Home poll option linked to slide 1 (or a "Last Slide Viewed" back link) is not a button: it votes with the cooldown path, never a miss_tap', async () => {
+    // `linked: true` here models a VOTE_/RATE_ shape whose own link targets slide 1, or uses
+    // "Last Slide Viewed": detectPollOptions sets `linked: true` for any link, but
+    // detectButtons only makes a home shape a button when it links to a *later* slide, so
+    // this option is never in deck.buttons. Whether the kiosk treats it as a button must
+    // therefore go by button membership, not by `opt.linked`.
+    const deck = fakeDeck();
+    deck.pollOptions = [
+      {
+        slide: 1,
+        id: 'v-home-link',
+        shapeName: 'VOTE_Feedback_Yes',
+        poll: 'Feedback',
+        choice: 'Yes',
+        kind: 'vote',
+        label: 'Yes',
+        bounds: { x: 900, y: 900, w: 100, h: 60 },
+        linked: true,
+        targetSlide: undefined,
+      },
+    ];
+    controller = new KioskController({
+      root,
+      deck,
+      config: fakeConfig(),
+      sessionId: 'sess-1',
+      log: (e) => logs.push(e),
+      onAdminRequested,
+    });
+    await controller.start();
+    logs.length = 0;
+
+    tap(root, 950, 930); // inside the option's bounds
+
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ event: 'vote', poll: 'Feedback', choice: 'Yes', slide_from: 1 });
+    expect(logs[0].visit_id).toBeUndefined();
+    expect(logs.some((l) => l.event === 'miss_tap')).toBe(false);
+  });
+
   it('attract wake tap on a vote shape logs no vote', async () => {
     await makePollController({ attract: { enabled: true, idleSec: 5, mode: 'pulse', slides: [], slideSec: 4 } });
     vi.advanceTimersByTime(5000); // idle -> attract_start
