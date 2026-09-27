@@ -387,7 +387,9 @@ export class SetupScreen {
     if (this.previewSlide === 1) {
       for (const button of this.deck.buttons) {
         const label = this.config.buttonLabels[button.id] ?? button.defaultLabel;
-        this.addPreviewOutline(overlay, button.bounds, label, () => this.showPreviewSlide(button.targetSlide));
+        this.addPreviewOutline(overlay, button.bounds, label, () => this.showPreviewSlide(button.targetSlide), {
+          buttonId: button.id,
+        });
       }
     } else {
       // Destination slides: outline any onward nav links the same way, so "Tapping a
@@ -418,7 +420,7 @@ export class SetupScreen {
           if (opt.targetSlide !== undefined) this.showPreviewSlide(opt.targetSlide);
           else this.previewGoBack();
         },
-        'preview-poll-outline',
+        { extraClass: 'preview-poll-outline', pollKey: pollLabelKey(opt.poll, opt.choice) },
       );
     }
   }
@@ -446,8 +448,9 @@ export class SetupScreen {
     bounds: Rect,
     label: string,
     onTap: () => void,
-    extraClass?: string,
+    opts: { buttonId?: string; pollKey?: string; extraClass?: string } = {},
   ): void {
+    const { buttonId, pollKey, extraClass } = opts;
     const box = h(
       'div',
       { class: `preview-btn-outline${extraClass ? ` ${extraClass}` : ''}`, style: { pointerEvents: 'auto' } },
@@ -458,8 +461,30 @@ export class SetupScreen {
     box.style.top = `${bounds.y}px`;
     box.style.width = `${bounds.w}px`;
     box.style.height = `${bounds.h}px`;
+    if (buttonId !== undefined) box.dataset.buttonId = buttonId;
+    if (pollKey !== undefined) box.dataset.pollKey = pollKey;
     box.addEventListener('click', onTap);
     overlay.appendChild(box);
+  }
+
+  /** Updates a home-slide button's outline label in the live preview in place, as its label field is typed. */
+  private updatePreviewLabel(buttonId: string, label: string): void {
+    const outlines = this.previewStage?.overlay.querySelectorAll<HTMLElement>('.preview-btn-outline') ?? [];
+    for (const box of outlines) {
+      if (box.dataset.buttonId !== buttonId) continue;
+      const span = box.querySelector('.preview-btn-label');
+      if (span) span.textContent = label;
+    }
+  }
+
+  /** Updates a poll option's outline label in the live preview in place, as its label field is typed. */
+  private updatePreviewPollLabel(pollKey: string, label: string): void {
+    const outlines = this.previewStage?.overlay.querySelectorAll<HTMLElement>('.preview-poll-outline') ?? [];
+    for (const box of outlines) {
+      if (box.dataset.pollKey !== pollKey) continue;
+      const span = box.querySelector('.preview-btn-label');
+      if (span) span.textContent = label;
+    }
   }
 
   private showPreviewSlide(index: number, record = true): void {
@@ -500,12 +525,21 @@ export class SetupScreen {
       ]);
     }
     const cfg = this.config;
-    const errors = validateConfig(cfg);
 
+    // Selects and checkboxes can change which controls exist, so they re-render the screen.
     const update = (patch: Partial<KioskConfig>) => {
       this.config = { ...this.config, ...patch };
       this.saveDebounced();
       this.render();
+    };
+    // Typed fields must not: a full render replaces the focused input (the iPad keyboard
+    // closes after every character) and remounts the preview. Refresh only what depends on
+    // the value: this step's error list and the Go live button.
+    const edit = (patch: Partial<KioskConfig>) => {
+      this.config = { ...this.config, ...patch };
+      this.saveDebounced();
+      this.refreshConfigErrors();
+      this.replaceStep('golive', this.renderGoLiveStep());
     };
 
     const buttonLabelRows = this.deck.buttons.map((b: ButtonDef) =>
@@ -514,8 +548,11 @@ export class SetupScreen {
         h('input', {
           type: 'text',
           value: cfg.buttonLabels[b.id] ?? b.defaultLabel,
-          oninput: (e: Event) =>
-            update({ buttonLabels: { ...cfg.buttonLabels, [b.id]: (e.target as HTMLInputElement).value } }),
+          oninput: (e: Event) => {
+            const label = (e.target as HTMLInputElement).value;
+            edit({ buttonLabels: { ...this.config.buttonLabels, [b.id]: label } });
+            if (this.previewSlide === 1) this.updatePreviewLabel(b.id, label);
+          },
         }),
       ]),
     );
@@ -529,7 +566,7 @@ export class SetupScreen {
       h('input', {
         type: 'text',
         value: cfg.sessionName,
-        oninput: (e: Event) => update({ sessionName: (e.target as HTMLInputElement).value }),
+        oninput: (e: Event) => edit({ sessionName: (e.target as HTMLInputElement).value }),
       }),
 
       h('h3', {}, ['Device name']),
@@ -538,13 +575,13 @@ export class SetupScreen {
         value: cfg.deviceName,
         maxlength: '40',
         placeholder: 'e.g. Stand A',
-        oninput: (e: Event) => update({ deviceName: (e.target as HTMLInputElement).value }),
+        oninput: (e: Event) => edit({ deviceName: (e.target as HTMLInputElement).value }),
       }),
 
       h('h3', {}, ['Button labels']),
       h('div', { class: 'field-list' }, buttonLabelRows),
 
-      this.pollLabelFields(cfg, update),
+      this.pollLabelFields(cfg, edit),
 
       h('h3', {}, ['Return-to-home timeout']),
       h('label', { class: 'checkbox-row' }, [
@@ -563,7 +600,7 @@ export class SetupScreen {
             min: '5',
             max: '300',
             value: String(cfg.timeoutSec ?? 20),
-            oninput: (e: Event) => update({ timeoutSec: Number((e.target as HTMLInputElement).value) }),
+            oninput: (e: Event) => edit({ timeoutSec: Number((e.target as HTMLInputElement).value) }),
           }),
 
       h('h3', {}, ['Return method']),
@@ -604,7 +641,7 @@ export class SetupScreen {
         type: 'number',
         min: '0',
         value: String(cfg.debounceMs),
-        oninput: (e: Event) => update({ debounceMs: Number((e.target as HTMLInputElement).value) }),
+        oninput: (e: Event) => edit({ debounceMs: Number((e.target as HTMLInputElement).value) }),
       }),
 
       h('h3', {}, ['Secret exit sequence']),
@@ -625,14 +662,26 @@ export class SetupScreen {
       ]),
 
       h('h3', {}, ['Admin PIN (optional)']),
-      this.pinFields(cfg, update),
+      this.pinFields(cfg, update, edit),
 
-      errors.length > 0
-        ? h('div', { class: 'issue-group issue-group--error' }, [
-            h('ul', {}, errors.map((e) => h('li', {}, [e]))),
-          ])
-        : null,
+      h('div', { class: 'config-errors' }, [this.renderConfigErrors()]),
     ]);
+  }
+
+  private renderConfigErrors(): HTMLElement | null {
+    const errors = validateConfig(this.config);
+    return errors.length > 0
+      ? h('div', { class: 'issue-group issue-group--error' }, [h('ul', {}, errors.map((e) => h('li', {}, [e])))])
+      : null;
+  }
+
+  /** Re-validates after a typed edit and swaps the Configure error list in place. */
+  private refreshConfigErrors(): void {
+    const host = this.root.querySelector('[data-step="configure"] .config-errors');
+    if (!host) return;
+    clear(host as HTMLElement);
+    const list = this.renderConfigErrors();
+    if (list) host.appendChild(list);
   }
 
   /**
@@ -800,7 +849,7 @@ export class SetupScreen {
    * option, like Button labels, keyed by `pollLabelKey(poll, choice)`. Only shown when the
    * deck actually has poll options, so a deck without polls looks exactly as it did before.
    */
-  private pollLabelFields(cfg: KioskConfig, update: (p: Partial<KioskConfig>) => void): HTMLElement | null {
+  private pollLabelFields(cfg: KioskConfig, edit: (p: Partial<KioskConfig>) => void): HTMLElement | null {
     const options = this.deck?.pollOptions ?? [];
     if (options.length === 0) return null;
 
@@ -811,8 +860,12 @@ export class SetupScreen {
         h('input', {
           type: 'text',
           value: cfg.pollLabels[key] ?? opt.label,
-          oninput: (e: Event) =>
-            update({ pollLabels: { ...cfg.pollLabels, [key]: (e.target as HTMLInputElement).value } }),
+          // Typed, so it edits in place (see `edit` in renderConfigureStep) and keeps focus.
+          oninput: (e: Event) => {
+            const label = (e.target as HTMLInputElement).value;
+            edit({ pollLabels: { ...this.config.pollLabels, [key]: label } });
+            this.updatePreviewPollLabel(key, `${this.pollLabel(opt)}: ${label}`);
+          },
         }),
       ]);
     });
@@ -859,9 +912,24 @@ export class SetupScreen {
     );
   }
 
-  private pinFields(cfg: KioskConfig, update: (p: Partial<KioskConfig>) => void): HTMLElement {
+  private pinFields(
+    cfg: KioskConfig,
+    update: (p: Partial<KioskConfig>) => void,
+    edit: (p: Partial<KioskConfig>) => void,
+  ): HTMLElement {
     const enabled = cfg.adminPin !== null;
-    const confirmId = 'pin-confirm-input';
+    const confirm = h('input', {
+      id: 'pin-confirm-input',
+      type: 'password',
+      inputmode: 'numeric',
+      pattern: '[0-9]*',
+      maxlength: '6',
+      oninput: () => checkConfirm(),
+    }) as HTMLInputElement;
+    const checkConfirm = () => {
+      const mismatch = confirm.value !== (this.config.adminPin ?? '');
+      confirm.setCustomValidity(mismatch ? 'PINs do not match' : '');
+    };
     return h('div', {}, [
       this.checkboxField('Require a PIN', enabled, (v) => update({ adminPin: v ? '' : null })),
       enabled
@@ -874,25 +942,16 @@ export class SetupScreen {
                 pattern: '[0-9]*',
                 maxlength: '6',
                 value: cfg.adminPin ?? '',
-                oninput: (e: Event) =>
-                  update({ adminPin: (e.target as HTMLInputElement).value.replace(/\D/g, '').slice(0, 6) }),
-              }),
-            ]),
-            h('label', { class: 'field-row' }, [
-              h('span', {}, ['Confirm PIN']),
-              h('input', {
-                id: confirmId,
-                type: 'password',
-                inputmode: 'numeric',
-                pattern: '[0-9]*',
-                maxlength: '6',
                 oninput: (e: Event) => {
-                  const val = (e.target as HTMLInputElement).value;
-                  const mismatch = val !== (cfg.adminPin ?? '');
-                  (e.target as HTMLInputElement).setCustomValidity(mismatch ? 'PINs do not match' : '');
+                  const input = e.target as HTMLInputElement;
+                  const pin = input.value.replace(/\D/g, '').slice(0, 6);
+                  if (input.value !== pin) input.value = pin;
+                  edit({ adminPin: pin });
+                  if (confirm.value) checkConfirm();
                 },
               }),
             ]),
+            h('label', { class: 'field-row' }, [h('span', {}, ['Confirm PIN']), confirm]),
           ])
         : null,
     ]);
@@ -918,7 +977,10 @@ export class SetupScreen {
       !ready
         ? h('p', { class: 'muted' }, ['Fix errors, accept warnings and complete Configure to enable Go live.'])
         : null,
-      h('div', { class: 'storage-info', id: 'storage-info' }, ['Storage: …']),
+      // Keep the last storage reading when this step is replaced in place after an edit.
+      h('div', { class: 'storage-info', id: 'storage-info' }, [
+        this.root.querySelector('#storage-info')?.textContent ?? 'Storage: …',
+      ]),
     ]);
   }
 
