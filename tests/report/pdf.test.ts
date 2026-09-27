@@ -205,4 +205,38 @@ describe('buildPdf: exact page counts', () => {
     expect(await readHeader(blob)).toBe('%PDF');
     expect(await countPdfPages(blob)).toBe(5);
   });
+
+  it('adds a "Slides and paths" page after Return behaviour only when there are onward nav taps', async () => {
+    const deck = makeDeck(['b1']);
+    const config = defaultConfig('demo.pptx');
+    const withoutNavTaps: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', visit_id: 'v1', event: 'button_press', button_id: 'b1', button_label: 'A', slide_from: 1, slide_to: 2 },
+      { ts: '2026-10-14T09:00:10.000+00:00', session_id: 's1', visit_id: 'v1', event: 'return_home', method: 'tap', dwell_ms: 10000, slide_from: 2, slide_to: 1 },
+    ];
+    const withNavTaps: LogEvent[] = [
+      ...withoutNavTaps,
+      { ts: '2026-10-14T09:01:00.000+00:00', session_id: 's1', visit_id: 'v2', event: 'button_press', button_id: 'b1', button_label: 'A', slide_from: 1, slide_to: 2 },
+      { ts: '2026-10-14T09:01:05.000+00:00', session_id: 's1', visit_id: 'v2', event: 'slide_nav', slide_from: 2, slide_to: 3, dwell_ms: 5000 },
+      { ts: '2026-10-14T09:01:12.000+00:00', session_id: 's1', visit_id: 'v2', event: 'return_home', method: 'tap', dwell_ms: 12000, slide_from: 3, slide_to: 1 },
+    ];
+
+    const withoutBlob = await buildPdf(withoutNavTaps, deck, config);
+    expect(await countPdfPages(withoutBlob)).toBe(4);
+
+    const withBlob = await buildPdf(withNavTaps, deck, config);
+    expect(await countPdfPages(withBlob)).toBe(5);
+  });
+
+  it('renders the Slides and paths page without throwing for a visit orphaned by a kill', async () => {
+    const deck = makeDeck(['b1']);
+    const config = defaultConfig('demo.pptx');
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', visit_id: 'v1', event: 'button_press', button_id: 'b1', button_label: 'A', slide_from: 1, slide_to: 2 },
+      { ts: '2026-10-14T09:00:05.000+00:00', session_id: 's1', visit_id: 'v1', event: 'slide_nav', slide_from: 2, slide_to: 3, dwell_ms: 5000 },
+      // no return_home: the app was killed mid-visit
+    ];
+    const blob = await buildPdf(events, deck, config);
+    expect(await readHeader(blob)).toBe('%PDF');
+    expect(await countPdfPages(blob)).toBe(5);
+  });
 });

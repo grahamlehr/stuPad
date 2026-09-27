@@ -49,7 +49,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 - The thumbnail can fail (Safari canvas tainting in `rasterizeSlide`). The button outlines alone still make the chart readable, so the page never depends on it.
 - Tests: grid binning at the edges (x = 100 lands in the last cell), empty grid, chart with a mock context.
 
-## C. Time per slide and common paths (item 2)
+## C. Time per slide and common paths (item 2) (done in 1.4.0)
 
 **Goal.** For decks with onward navigation, show how long people spend on each slide and which routes they take.
 

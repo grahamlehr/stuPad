@@ -11,10 +11,15 @@ import {
   drawPercentBarChart,
   drawHeatmapChart,
   drawTapHeatmap,
+  drawSlideTimeChart,
+  drawPathTable,
   type NamedValue,
   type ActivityChartData,
   type HeatmapChartData,
   type TapHeatmapData,
+  type SlideTimeChartData,
+  type PathTableData,
+  type PathTableEntry,
 } from './charts';
 
 const PAGE_W = 297; // A4 landscape, mm
@@ -392,6 +397,46 @@ export async function buildPdf(
     doc.text('Timeout share by button (%)', timeoutX, MARGIN + 10);
     const timeoutUrl = renderChartImage(drawPercentBarChart, timeoutData, 640, 440, fontScaleFor(640, timeoutW, 13));
     placeImage(doc, timeoutUrl, 640, 440, timeoutX, MARGIN + 14, timeoutW);
+
+    // ---------------------------------------------------------------- page: Slides and paths (only with onward nav taps)
+    if (stats.totalNavTaps > 0) {
+      doc.addPage();
+      drawPageTitle(doc, 'Slides and paths');
+
+      const leftW = CONTENT_W * 0.52;
+      const rightX = MARGIN + leftW + 10;
+      const rightW = CONTENT_W - leftW - 10;
+
+      const slideTimeData: SlideTimeChartData = {
+        entries: stats.slideTime.map((s) => ({
+          slide: s.slide,
+          visits: s.visits,
+          medianMs: s.medianMs,
+          medianMsExclTimeout: s.medianMsExclTimeout,
+        })),
+      };
+      const slideTimeUrl = renderChartImage(drawSlideTimeChart, slideTimeData, 800, 520, fontScaleFor(800, leftW, 13));
+      placeImage(doc, slideTimeUrl, 800, 520, MARGIN, MARGIN + 14, leftW);
+
+      const pathEntries: PathTableEntry[] = stats.topPaths.map((p) => ({
+        path: p.path,
+        count: p.count,
+        pct: stats.totalPaths > 0 ? (p.count / stats.totalPaths) * 100 : 0,
+        ended: p.ended,
+      }));
+      if (stats.otherPaths > 0) {
+        pathEntries.push({
+          path: [],
+          label: 'Other',
+          count: stats.otherPaths,
+          pct: stats.totalPaths > 0 ? (stats.otherPaths / stats.totalPaths) * 100 : 0,
+          ended: false,
+        });
+      }
+      const pathTableData: PathTableData = { entries: pathEntries };
+      const pathUrl = renderChartImage(drawPathTable, pathTableData, 720, 520, fontScaleFor(720, rightW, 12));
+      placeImage(doc, pathUrl, 720, 520, rightX, MARGIN + 14, rightW);
+    }
 
     // ---------------------------------------------------------------- page: Hour-by-day (multi-day only; last page)
     if (stats.isMultiDay) {

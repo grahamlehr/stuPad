@@ -374,3 +374,205 @@ describe('computeStats: slide views and nav taps', () => {
     expect(stats.totalNavTaps).toBe(0);
   });
 });
+
+function resume(ts: string): LogEvent {
+  return { ts, session_id: SID, event: 'app_resume' };
+}
+
+function kioskEvent(event: 'kiosk_start' | 'kiosk_stop', ts: string): LogEvent {
+  return { ts, session_id: SID, event };
+}
+
+describe('computeStats: visitPaths (slide time and common paths)', () => {
+  it('empty log has empty slideTime and topPaths', () => {
+    const stats = computeStats([], {});
+    expect(stats.slideTime).toEqual([]);
+    expect(stats.topPaths).toEqual([]);
+    expect(stats.otherPaths).toBe(0);
+    expect(stats.totalPaths).toBe(0);
+  });
+
+  it('records the path and per-slide time for a multi-slide visit', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T10:00:00.000+00:00', { visit_id: 'v1', slide_to: 2 }),
+      nav('2026-10-14T10:00:05.000+00:00', { visit_id: 'v1', slide_from: 2, slide_to: 3, dwell_ms: 5000 }),
+      nav('2026-10-14T10:00:08.000+00:00', { visit_id: 'v1', slide_from: 3, slide_to: 4, dwell_ms: 3000 }),
+      ret('2026-10-14T10:00:14.000+00:00', { visit_id: 'v1', method: 'tap', slide_from: 4 }),
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+
+    expect(stats.topPaths).toEqual([{ path: [2, 3, 4], count: 1, ended: false }]);
+    expect(stats.otherPaths).toBe(0);
+    expect(stats.totalPaths).toBe(1);
+
+    const bySlide = new Map(stats.slideTime.map((s) => [s.slide, s]));
+    expect(bySlide.get(2)).toMatchObject({ visits: 1, medianMs: 5000, meanMs: 5000 });
+    expect(bySlide.get(3)).toMatchObject({ visits: 1, medianMs: 3000, meanMs: 3000 });
+    // last slide's time is return_home.ts minus the last arrival (10:00:08 -> 10:00:14 = 6000ms),
+    // not return_home.dwell_ms (which would be the whole-visit dwell, not just this slide's)
+    expect(bySlide.get(4)).toMatchObject({ visits: 1, medianMs: 6000, meanMs: 6000 });
+  });
+
+  it('counts a back-link revisit to the same slide as two separate timed stays', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T10:00:00.000+00:00', { visit_id: 'v2', slide_to: 2 }),
+      nav('2026-10-14T10:00:04.000+00:00', { visit_id: 'v2', slide_from: 2, slide_to: 3, dwell_ms: 4000 }),
+      nav('2026-10-14T10:00:07.000+00:00', { visit_id: 'v2', slide_from: 3, slide_to: 2, dwell_ms: 3000 }),
+      ret('2026-10-14T10:00:12.000+00:00', { visit_id: 'v2', method: 'home_button', slide_from: 2 }),
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+
+    expect(stats.topPaths).toEqual([{ path: [2, 3, 2], count: 1, ended: false }]);
+
+    const slide2 = stats.slideTime.find((s) => s.slide === 2)!;
+    // one stay of 4000ms (before leaving to slide 3) and one of 5000ms (10:00:07 -> 10:00:12,
+    // the second visit to slide 2, ended by the return)
+    expect(slide2.visits).toBe(2);
+    expect(slide2.medianMs).toBe(4500); // median of [4000, 5000]
+  });
+
+  it('leaves a visit orphaned by app_resume out of slide time, and counts its path as ended', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T10:00:00.000+00:00', { visit_id: 'v3', slide_to: 2 }),
+      nav('2026-10-14T10:00:05.000+00:00', { visit_id: 'v3', slide_from: 2, slide_to: 3, dwell_ms: 5000 }),
+      resume('2026-10-14T11:00:00.000+00:00'), // app was killed and relaunched mid-visit; no return_home ever came
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+
+    expect(stats.topPaths).toEqual([{ path: [2, 3], count: 1, ended: true }]);
+    // slide 2's stay (timed by the slide_nav that left it) is real and kept...
+    expect(stats.slideTime.find((s) => s.slide === 2)).toMatchObject({ visits: 1, medianMs: 5000 });
+    // ...but slide 3 was never left via slide_nav or return_home, so it has no timed stay
+    expect(stats.slideTime.find((s) => s.slide === 3)).toBeUndefined();
+  });
+
+  it('leaves a visit orphaned by kiosk_start out of slide time, and counts its path as ended', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T10:00:00.000+00:00', { visit_id: 'v3a', slide_to: 2 }),
+      nav('2026-10-14T10:00:05.000+00:00', { visit_id: 'v3a', slide_from: 2, slide_to: 3, dwell_ms: 5000 }),
+      kioskEvent('kiosk_start', '2026-10-14T11:00:00.000+00:00'), // admin resumed/restarted the kiosk mid-visit
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+
+    expect(stats.topPaths).toEqual([{ path: [2, 3], count: 1, ended: true }]);
+    expect(stats.slideTime.find((s) => s.slide === 2)).toMatchObject({ visits: 1, medianMs: 5000 });
+    expect(stats.slideTime.find((s) => s.slide === 3)).toBeUndefined();
+  });
+
+  it('leaves a visit orphaned by kiosk_stop out of slide time, and counts its path as ended', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T10:00:00.000+00:00', { visit_id: 'v3b', slide_to: 2 }),
+      nav('2026-10-14T10:00:05.000+00:00', { visit_id: 'v3b', slide_from: 2, slide_to: 3, dwell_ms: 5000 }),
+      kioskEvent('kiosk_stop', '2026-10-14T11:00:00.000+00:00'), // admin exited to Setup mid-visit
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+
+    expect(stats.topPaths).toEqual([{ path: [2, 3], count: 1, ended: true }]);
+    expect(stats.slideTime.find((s) => s.slide === 2)).toMatchObject({ visits: 1, medianMs: 5000 });
+    expect(stats.slideTime.find((s) => s.slide === 3)).toBeUndefined();
+  });
+
+  it('treats an unparseable button_press timestamp as unknown: no slide time, but the path still counts', () => {
+    const events: LogEvent[] = [
+      press('b1', 'not-a-date', { visit_id: 'v-bad', slide_to: 2 }),
+      ret('2026-10-14T10:00:10.000+00:00', { visit_id: 'v-bad', method: 'tap', slide_from: 2 }),
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+
+    // the visit's arrival time on slide 2 is unknown, so return_home.ts minus it is NaN and
+    // gets skipped, per the Number.isFinite duration guard
+    expect(stats.slideTime.find((s) => s.slide === 2)).toBeUndefined();
+    // but the path itself doesn't depend on timing, so it's still recorded
+    expect(stats.topPaths).toEqual([{ path: [2], count: 1, ended: false }]);
+  });
+
+  it('leaves a visit orphaned by the log simply ending out of slide time, counted as ended in paths', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T10:00:00.000+00:00', { visit_id: 'v4', slide_to: 2 }),
+      nav('2026-10-14T10:00:05.000+00:00', { visit_id: 'v4', slide_from: 2, slide_to: 3, dwell_ms: 5000 }),
+      // log ends here: no return_home, no app_resume/kiosk_stop
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+
+    expect(stats.topPaths).toEqual([{ path: [2, 3], count: 1, ended: true }]);
+    expect(stats.slideTime.find((s) => s.slide === 3)).toBeUndefined();
+  });
+
+  it('orphans a still-open visit when a new button_press starts before it returned', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T10:00:00.000+00:00', { visit_id: 'v5', slide_to: 2 }),
+      // v5 never returns; the visitor apparently walked off and someone else pressed a button
+      press('b1', '2026-10-14T10:05:00.000+00:00', { visit_id: 'v6', slide_to: 2 }),
+      ret('2026-10-14T10:05:10.000+00:00', { visit_id: 'v6', method: 'tap', slide_from: 2 }),
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+
+    const paths = stats.topPaths.slice().sort((a, b) => a.count - b.count || Number(a.ended) - Number(b.ended));
+    expect(paths).toContainEqual({ path: [2], count: 1, ended: true }); // v5
+    expect(paths).toContainEqual({ path: [2], count: 1, ended: false }); // v6
+  });
+
+  it('excludes a timeout-ended visit\'s last-slide stay from medianMsExclTimeout but keeps it in medianMs', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T10:00:00.000+00:00', { visit_id: 'v7', slide_to: 2 }),
+      ret('2026-10-14T10:00:20.000+00:00', { visit_id: 'v7', method: 'timeout', slide_from: 2 }), // 20s, timeout-skewed
+      press('b1', '2026-10-14T11:00:00.000+00:00', { visit_id: 'v8', slide_to: 2 }),
+      ret('2026-10-14T11:00:06.000+00:00', { visit_id: 'v8', method: 'tap', slide_from: 2 }), // 6s, a real stay
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+
+    const slide2 = stats.slideTime.find((s) => s.slide === 2)!;
+    expect(slide2.visits).toBe(2);
+    expect(slide2.medianMs).toBe(13000); // median of [20000, 6000] includes both
+    expect(slide2.visitsExclTimeout).toBe(1);
+    expect(slide2.medianMsExclTimeout).toBe(6000); // only the tap-ended stay
+  });
+
+  it('reports null medianMsExclTimeout when every visit through a slide ended by timeout', () => {
+    const events: LogEvent[] = [
+      press('b1', '2026-10-14T10:00:00.000+00:00', { visit_id: 'v9', slide_to: 2 }),
+      ret('2026-10-14T10:00:20.000+00:00', { visit_id: 'v9', method: 'timeout', slide_from: 2 }),
+    ];
+    const stats = computeStats(events, { b1: 'A' });
+    const slide2 = stats.slideTime.find((s) => s.slide === 2)!;
+    expect(slide2.visitsExclTimeout).toBe(0);
+    expect(slide2.medianMsExclTimeout).toBeNull();
+  });
+
+  it('ignores slide_nav and return_home events whose visit_id has no button_press (scope cut mid-visit)', () => {
+    const events: LogEvent[] = [
+      nav('2026-10-14T10:00:00.000+00:00', { visit_id: 'orphan', slide_from: 2, slide_to: 3, dwell_ms: 5000 }),
+      ret('2026-10-14T10:00:05.000+00:00', { visit_id: 'orphan', method: 'tap', slide_from: 3 }),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.slideTime).toEqual([]);
+    expect(stats.topPaths).toEqual([]);
+    expect(stats.totalPaths).toBe(0);
+    // the events still count toward totalNavTaps/totalVisits, which are independent of visitPaths
+    expect(stats.totalNavTaps).toBe(1);
+  });
+
+  it('buckets paths beyond the top 8 into otherPaths, sorted by count descending', () => {
+    const events: LogEvent[] = [];
+    // 9 distinct single-slide paths (slides 2..10), with counts 10 down to 2, one press+return each repeated
+    const counts = [10, 9, 8, 7, 6, 5, 4, 3, 2];
+    let t = 0;
+    counts.forEach((n, i) => {
+      const slide = i + 2;
+      for (let k = 0; k < n; k++) {
+        const startTs = new Date(2026, 9, 14, 9, 0, t).toISOString();
+        t += 1;
+        const endTs = new Date(2026, 9, 14, 9, 0, t).toISOString();
+        t += 1;
+        events.push(press('b1', startTs, { visit_id: `v-${slide}-${k}`, slide_to: slide }));
+        events.push(ret(endTs, { visit_id: `v-${slide}-${k}`, method: 'tap', slide_from: slide }));
+      }
+    });
+    const stats = computeStats(events, { b1: 'A' });
+
+    expect(stats.topPaths).toHaveLength(8);
+    expect(stats.topPaths.map((p) => p.count)).toEqual([10, 9, 8, 7, 6, 5, 4, 3]);
+    expect(stats.otherPaths).toBe(2);
+    expect(stats.totalPaths).toBe(counts.reduce((s, n) => s + n, 0));
+  });
+});

@@ -32,6 +32,51 @@ export interface ActivityBucket {
   total: number;
 }
 
+/**
+ * Time spent on one slide across all visits that were timed leaving it, either by a
+ * `slide_nav` (onward navigation) or by `return_home` (the slide the visit ended on).
+ * Home (slide 1) never appears here: visitors are never timed on it within a visit.
+ *
+ * `visits` counts every timed stay, so a slide reached twice in one visit (e.g. via a
+ * back link) contributes two stays, not one.
+ *
+ * **Timeout skew.** The stay on a visit's last slide before a `timeout` return is timed
+ * from arrival to the timeout firing, so it can overstate real attention by up to the
+ * configured timeout. `medianMs`/`meanMs` include every timed stay; `medianMsExclTimeout`
+ * excludes only the last-slide stay of visits that ended by timeout (earlier stays in the
+ * same visit, timed by `slide_nav.dwell_ms`, are never skewed and stay in both). Use the
+ * median over the mean in charts, since a handful of long timeout-skewed stays can drag
+ * the mean far from what most visitors actually experienced.
+ */
+export interface SlideTimeStat {
+  /** slide number, 2 or higher */
+  slide: number;
+  /** timed stays on this slide, across all visits (see doc comment above) */
+  visits: number;
+  medianMs: number;
+  meanMs: number;
+  /** median over stays excluding a timeout-ended visit's last-slide stay; null when none remain */
+  medianMsExclTimeout: number | null;
+  /** stays counted in medianMsExclTimeout */
+  visitsExclTimeout: number;
+}
+
+/**
+ * One distinct route through a deck: the button's target slide, then each `slide_nav`'s
+ * `slide_to`, in order. A path never includes slide 1: `return_home` ends a path rather
+ * than extending it.
+ *
+ * `ended` marks a path reconstructed from a visit that never reached `return_home` (the
+ * app was killed mid-visit, or the export scope cuts it off; see `visitPaths` below). A
+ * path with `ended: true` is a distinct entry from the same slide sequence completed
+ * normally, e.g. "3, 4 (ended)" is counted separately from "3, 4".
+ */
+export interface PathStat {
+  path: number[];
+  count: number;
+  ended: boolean;
+}
+
 /** Columns (x, 0..47) in the miss-tap grid; see `ReportStats.missGrid`. */
 export const MISS_GRID_COLS = 48;
 /** Rows (y, 0..26) in the miss-tap grid; see `ReportStats.missGrid`. */
@@ -74,6 +119,14 @@ export interface ReportStats {
   slideViews: SlideViewStat[];
   /** total slide_nav events (onward navigation taps on destination slides) */
   totalNavTaps: number;
+  /** median/mean time spent per slide, ascending by slide number; see SlideTimeStat */
+  slideTime: SlideTimeStat[];
+  /** the 8 most common paths through the deck, most frequent first; see visitPaths */
+  topPaths: PathStat[];
+  /** visits whose path isn't among topPaths, counted together as "other" */
+  otherPaths: number;
+  /** total path-tracked visits: sum of topPaths' counts plus otherPaths */
+  totalPaths: number;
 }
 
 function emptyMethodCounts(): Record<ReturnMethod, number> {
@@ -87,6 +140,17 @@ const MAX_BUCKETS = 48;
 function parseTs(ts: string): number {
   const t = Date.parse(ts);
   return Number.isNaN(t) ? 0 : t;
+}
+
+/**
+ * Like `parseTs`, but an unparseable `ts` maps to `NaN` instead of `0`. Used only by the
+ * visitPaths tracking below: a bad timestamp there must produce an unknown (and therefore
+ * skipped, via the existing `Number.isFinite` duration guards) stay rather than a
+ * multi-decade one computed against the epoch. `parseTs` itself keeps its `0` fallback for
+ * every other stat (bucket placement, sorting, overall dwell), which this doesn't touch.
+ */
+function parseTsOrNaN(ts: string): number {
+  return Date.parse(ts);
 }
 
 function dayKey(ts: string): string {
@@ -108,6 +172,23 @@ function emptyMissGrid(): number[][] {
 /** `pct` (0..100) to a clamped 0-based cell index in a `count`-wide axis. */
 function missCellIndex(pct: number, count: number): number {
   return Math.min(count - 1, Math.max(0, Math.floor((pct / 100) * count)));
+}
+
+/** Median of a non-empty array of numbers; 0 for an empty array (callers guard length first). */
+function median(nums: number[]): number {
+  if (nums.length === 0) return 0;
+  const sorted = nums.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/** In-progress visit tracked for `visitPaths` (see `computeStats`): the slides visited so
+ * far (button target, then each slide_nav target), the slide currently shown, and when
+ * the visitor arrived there (epoch ms), so the next event can time that stay. */
+interface OpenVisitPath {
+  path: number[];
+  currentSlide: number;
+  lastArrivalMs: number;
 }
 
 /**
@@ -150,6 +231,10 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       heatmapDays: [],
       slideViews: [],
       totalNavTaps: 0,
+      slideTime: [],
+      topPaths: [],
+      otherPaths: 0,
+      totalPaths: 0,
     };
   }
 
@@ -197,6 +282,50 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
   // open visits: visit_id -> { buttonId, ts }
   const openVisits = new Map<string, { buttonId: string; ts: string }>();
 
+  // ---- visitPaths (feature C: time per slide and common paths) ----
+  // Open visits tracked purely for path/slide-time purposes; separate from `openVisits`
+  // above (which only needs the starting button and its own dwell). Only one visit is
+  // ever open on a real kiosk, but this is keyed defensively by visit_id in case a
+  // filtered/merged log ever has more than one.
+  const openVisitPaths = new Map<string, OpenVisitPath>();
+  // slide -> every timed stay's duration, ms (see SlideTimeStat)
+  const durationsBySlide = new Map<number, number[]>();
+  // slide -> timed stays excluding the last-slide stay of a timeout-ended visit
+  const durationsBySlideExclTimeout = new Map<number, number[]>();
+  // pathKey(path, ended) -> aggregate; see PathStat
+  const pathCounts = new Map<string, { path: number[]; ended: boolean; count: number }>();
+
+  function pathKey(path: number[], ended: boolean): string {
+    return `${ended ? '1' : '0'}|${path.join(',')}`;
+  }
+
+  function recordPath(path: number[], ended: boolean): void {
+    if (path.length === 0) return; // nothing to report if the button press itself had no slide_to
+    const key = pathKey(path, ended);
+    const existing = pathCounts.get(key);
+    if (existing) existing.count += 1;
+    else pathCounts.set(key, { path: path.slice(), ended, count: 1 });
+  }
+
+  /** A visit that never reached return_home: the kiosk moved on (a new button_press, an
+   * app_resume/kiosk_start/kiosk_stop) or the log simply ends while it's still open. Counted
+   * in paths as ended; left out of slide-time entirely, per SPEC. */
+  function closeVisitOrphaned(visitId: string): void {
+    const v = openVisitPaths.get(visitId);
+    if (!v) return;
+    openVisitPaths.delete(visitId);
+    recordPath(v.path, true);
+  }
+
+  function pushDuration(map: Map<number, number[]>, slide: number, durationMs: number): void {
+    let arr = map.get(slide);
+    if (!arr) {
+      arr = [];
+      map.set(slide, arr);
+    }
+    arr.push(durationMs);
+  }
+
   // bucket sizing
   const rangeMs = Math.max(0, parseTs(lastTs) - parseTs(firstTs));
   let bucketMinutes = BUCKET_CANDIDATES_MIN[BUCKET_CANDIDATES_MIN.length - 1];
@@ -225,6 +354,12 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       latestLabel.set(ev.button_id, ev.button_label);
     }
 
+    // A visit still open when the kiosk restarts or resumes can never be completed by a
+    // later return_home, so close it now as an orphan (see closeVisitOrphaned).
+    if (ev.event === 'app_resume' || ev.event === 'kiosk_start' || ev.event === 'kiosk_stop') {
+      for (const id of Array.from(openVisitPaths.keys())) closeVisitOrphaned(id);
+    }
+
     if (ev.event === 'button_press' && ev.button_id) {
       const id = ev.button_id;
       ensure(id);
@@ -235,6 +370,21 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       }
       if (ev.visit_id) {
         openVisits.set(ev.visit_id, { buttonId: id, ts: ev.ts });
+
+        // A new visit starting means any previous visit was never returned from (the
+        // kiosk moved straight on to a new press), so orphan it before opening this one.
+        for (const oldId of Array.from(openVisitPaths.keys())) {
+          if (oldId !== ev.visit_id) closeVisitOrphaned(oldId);
+        }
+        if (ev.slide_to !== undefined) {
+          openVisitPaths.set(ev.visit_id, {
+            path: [ev.slide_to],
+            currentSlide: ev.slide_to,
+            // NaN (unparseable ts) propagates forward and is caught by the Number.isFinite
+            // guards below, rather than a decades-long stay computed against the epoch.
+            lastArrivalMs: parseTsOrNaN(ev.ts),
+          });
+        }
       }
 
       // activity bucket
@@ -280,6 +430,23 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
         dwellSumAll += dwell;
         dwellCountAll += 1;
       }
+
+      // visitPaths: a return_home with no matching open visit (its visit_id has no
+      // button_press in this event set, e.g. the export scope starts mid-visit) is
+      // ignored entirely for paths/slide-time, per SPEC.
+      const openPath = ev.visit_id ? openVisitPaths.get(ev.visit_id) : undefined;
+      if (openPath) {
+        const nowMs = parseTsOrNaN(ev.ts);
+        const lastDur = nowMs - openPath.lastArrivalMs;
+        if (Number.isFinite(lastDur) && lastDur >= 0) {
+          pushDuration(durationsBySlide, openPath.currentSlide, lastDur);
+          if (ev.method !== 'timeout') {
+            pushDuration(durationsBySlideExclTimeout, openPath.currentSlide, lastDur);
+          }
+        }
+        recordPath(openPath.path, false);
+        openVisitPaths.delete(ev.visit_id!);
+      }
     } else if (ev.event === 'miss_tap') {
       missTaps += 1;
       if (Number.isFinite(ev.x) && Number.isFinite(ev.y)) {
@@ -292,8 +459,30 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
       if (ev.slide_to !== undefined) {
         slideViewCounts.set(ev.slide_to, (slideViewCounts.get(ev.slide_to) ?? 0) + 1);
       }
+
+      // visitPaths: ignore a slide_nav whose visit_id has no matching button_press
+      // (same scope-cutting case as above).
+      const openPath = ev.visit_id ? openVisitPaths.get(ev.visit_id) : undefined;
+      if (openPath && ev.slide_to !== undefined) {
+        const nowMs = parseTsOrNaN(ev.ts);
+        // slide_nav.dwell_ms is kept when present, even if this event's own ts is malformed.
+        const dwell = ev.dwell_ms ?? nowMs - openPath.lastArrivalMs;
+        if (Number.isFinite(dwell) && dwell >= 0) {
+          // never the last stay of the visit (the visit continues past this slide), so
+          // it's kept in both the all-stays and excl.-timeout duration sets.
+          pushDuration(durationsBySlide, openPath.currentSlide, dwell);
+          pushDuration(durationsBySlideExclTimeout, openPath.currentSlide, dwell);
+        }
+        openPath.path.push(ev.slide_to);
+        openPath.currentSlide = ev.slide_to;
+        openPath.lastArrivalMs = nowMs;
+      }
     }
   }
+
+  // Any visit still open at the end of the log never reached return_home (the app was
+  // killed, or the log/export scope simply ends mid-visit), so orphan it too.
+  for (const id of Array.from(openVisitPaths.keys())) closeVisitOrphaned(id);
 
   // overall average dwell = matched (per-button) dwell + orphan-return dwell
   let matchedDwellSum = 0;
@@ -341,6 +530,27 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
     .sort((a, b) => a[0] - b[0])
     .map(([slide, views]) => ({ slide, views }));
 
+  const slideTime: SlideTimeStat[] = Array.from(durationsBySlide.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([slide, durations]) => {
+      const excl = durationsBySlideExclTimeout.get(slide) ?? [];
+      return {
+        slide,
+        visits: durations.length,
+        medianMs: median(durations),
+        meanMs: durations.reduce((s, d) => s + d, 0) / durations.length,
+        medianMsExclTimeout: excl.length > 0 ? median(excl) : null,
+        visitsExclTimeout: excl.length,
+      };
+    });
+
+  // Array.prototype.sort is a stable sort, so paths with equal counts keep first-seen
+  // (Map insertion) order rather than shuffling between calls.
+  const allPaths = Array.from(pathCounts.values()).sort((a, b) => b.count - a.count);
+  const topPaths: PathStat[] = allPaths.slice(0, 8).map((p) => ({ path: p.path, count: p.count, ended: p.ended }));
+  const otherPaths = allPaths.slice(8).reduce((s, p) => s + p.count, 0);
+  const totalPaths = allPaths.reduce((s, p) => s + p.count, 0);
+
   return {
     sessionId,
     firstTs,
@@ -359,5 +569,9 @@ export function computeStats(events: LogEvent[], labels: Record<string, string>)
     heatmapDays: heatmapDayOrder,
     slideViews,
     totalNavTaps,
+    slideTime,
+    topPaths,
+    otherPaths,
+    totalPaths,
   };
 }
