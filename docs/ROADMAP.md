@@ -4,18 +4,18 @@ Development plan for the next set of features, written Sep 27, 2026 against v1.2
 
 ## Summary and order
 
-Each row is one pull request and one release (every merge to `main` bumps `package.json`). The order puts report-only work first (no stored-data changes, lowest risk), then new logging that later reports build on, then parser and kiosk features, with video last because it carries the most risk for 12-hour runs.
+Each row is one pull request and one release (every merge to `main` bumps `package.json`). E waits on sample decks (decision 5), so it ships after H with its own version. The order puts report-only work first (no stored-data changes, lowest risk), then new logging that later reports build on, then parser and kiosk features, with video last because it carries the most risk for 12-hour runs.
 
 | # | Release | Feature | Size | Shared contract changes (`src/types.ts`) |
 | --- | --- | --- | --- | --- |
-| A | 1.2.5 | 4. Setup controls for transition length and exit window; pattern-aware hint | S | None (fields already exist) |
+| A | 1.2.6 | 4. Setup controls for transition length and exit window; pattern-aware hint | S | None (fields already exist) |
 | B | 1.3.0 | 1. Miss-tap heatmap on the home slide (PDF) | S | None |
 | C | 1.4.0 | 2. Time per slide and common paths (PDF) | M | None |
 | D | 1.5.0 | 3. Heartbeat and uptime | S | `EventType += 'heartbeat'`; `KioskConfig.deviceName` |
-| E | 1.6.0 | Embedded fonts from the .pptx | M-L | `Deck.embeddedFonts`; new `Issue` code |
-| F | 1.7.0 | 5. Attract loop | M | `KioskConfig.attract`; `EventType += 'attract_start' \| 'attract_end'` |
-| G | 1.8.0 | 9. Polls and ratings | M | `Deck.pollOptions`; `EventType += 'vote'`; `LogEvent.poll`, `LogEvent.choice` |
-| H | 1.9.0 | 8. Video on destination slides | L | `SlideElement += VideoElement`; `EventType += 'video_end'`; `LogEvent.watched_ms` |
+| E | later | Embedded fonts from the .pptx | M-L | `Deck.embeddedFonts`; new `Issue` code |
+| F | 1.6.0 | 5. Attract loop | M | `KioskConfig.attract`; `EventType += 'attract_start' \| 'attract_end'` |
+| G | 1.7.0 | 9. Polls and ratings | M | `Deck.pollOptions`; `EventType += 'vote'`; `LogEvent.poll`, `LogEvent.choice` |
+| H | 1.8.0 | 8. Video on destination slides | L | `SlideElement += VideoElement`; `EventType += 'video_end'`; `LogEvent.watched_ms` |
 
 All contract changes are additive. New `LogEvent` fields are optional, and new `CSV_COLUMNS` are appended at the end so existing spreadsheets that read the CSV by column position keep working. Each new `Deck` or `KioskConfig` field gets a default on load in `src/store/index.ts`, following the existing `navLinks` and `glow` shims.
 
