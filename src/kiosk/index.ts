@@ -9,9 +9,14 @@
  * without a DOM or fake timers.
  */
 import { SlideStage, preloadDeckFonts } from '../render';
+import type { StageVideo } from '../render';
 import type { Deck, ButtonDef, NavLinkDef, PollOptionDef, KioskConfig, GlowConfig, LogEvent, Rect, SecretPattern } from '../types';
 import { uuid } from '../util';
 import { applyGlowStyle, createGlow, createGlowLayer } from './glow';
+import { VideoPlayer, type VideoLogCtx } from './video';
+
+export { VideoPlayer } from './video';
+export type { VideoLogCtx } from './video';
 
 // ------------------------------------------------------------------ geometry
 
@@ -293,6 +298,10 @@ export class KioskController {
   private wakeLock: WakeLockSentinelLike | null = null;
   private _wakeLockAvailable = false;
 
+  /** Owns the one video that's ever playing across the whole kiosk (see src/kiosk/video.ts);
+   * the controller only calls it at slide-change points and in stop(). */
+  private readonly videoPlayer: VideoPlayer;
+
   private readonly onPointerDown = (ev: PointerEvent): void => {
     this.handleTap(ev.clientX, ev.clientY, this.now());
   };
@@ -302,7 +311,12 @@ export class KioskController {
   private readonly onContextMenu = (ev: Event): void => ev.preventDefault();
   private readonly onSelectStart = (ev: Event): void => ev.preventDefault();
   private readonly onVisibilityChange = (): void => {
-    if (document.visibilityState === 'visible') void this.reacquireWakeLock();
+    if (document.visibilityState === 'visible') {
+      void this.reacquireWakeLock();
+      // An OS interruption (screen lock, app switch, Control Center) pauses the active video
+      // itself; nothing else would ever call play() on it again.
+      this.videoPlayer.resumeIfNeeded();
+    }
   };
 
   constructor(opts: KioskControllerOpts) {
@@ -319,6 +333,13 @@ export class KioskController {
       else this.pollOptionsBySlide.set(opt.slide, [opt]);
     }
     for (const b of opts.deck.buttons) this.homeButtonIds.add(b.id);
+    this.videoPlayer = new VideoPlayer({
+      log: this.log,
+      onPlaying: () => this.pauseTimeoutForVideo(),
+      onFinished: () => this.resumeTimeoutAfterVideo(),
+      onStalled: () => this.resumeTimeoutAfterVideo(),
+      onPaused: () => this.resumeTimeoutAfterVideo(),
+    });
   }
 
   get wakeLockAvailable(): boolean {
@@ -370,6 +391,9 @@ export class KioskController {
     }
     this.glowLayers.clear(); // their elements go with the stage's overlay
     this.attractPulseEl = null; // same: goes with the stage's overlay
+    // Before the stage is torn down: leaves no active src/listeners/watchdog and revokes
+    // every object URL it created (see src/kiosk/video.ts and SlideStage.destroy()'s doc).
+    this.videoPlayer.destroy();
     this.stage?.destroy();
     this.stage = null;
   }
@@ -447,6 +471,14 @@ export class KioskController {
     return this.deck.buttons.find((b) => pointInRect(px, py, b.bounds));
   }
 
+  /** Videos on `slide` are already precomputed by the stage (`SlideStage.videosOn`); this is
+   * just a bounds filter over that small array, so a slide with no videos costs nothing extra
+   * on the tap path (CLAUDE.md: "Never rebuild slide DOM on each tap"). */
+  private hitTestVideo(px: number, py: number, slide: number): StageVideo | undefined {
+    if (!this.stage) return undefined;
+    return this.stage.videosOn(slide).find((v) => pointInRect(px, py, v.def.xfrm));
+  }
+
   private handleHomeTap(px: number, py: number, xPct: number, yPct: number, now: number): void {
     // Poll options are tested before buttons (ROADMAP "Polls and ratings"). Whether an option
     // takes the button path is decided by button membership (homeButtonIds), not by its own
@@ -515,10 +547,26 @@ export class KioskController {
     this.mode = 'destination';
     this.destSlide = button.targetSlide;
     this.visitPath = [button.targetSlide];
-    void this.stage?.show(button.targetSlide, { type: this.config.transition, ms: this.config.transitionMs });
-    this.showGlow(button.targetSlide);
+    const targetSlide = button.targetSlide;
+    void this.stage?.show(targetSlide, { type: this.config.transition, ms: this.config.transitionMs })
+      .then(() => this.activateArrivalVideo(targetSlide));
+    this.showGlow(targetSlide);
     this.setupFallbackHomeButton();
     this.startDestinationTimer();
+  }
+
+  /** Current visit's fields, in the shape `src/kiosk/video.ts` logs on `video_end` (like
+   * `slide_nav`'s own button_id/button_label). */
+  private currentVideoLogCtx(): VideoLogCtx {
+    return { visitId: this.visitId, buttonId: this.visitButtonId, buttonLabel: this.visitButtonLabel };
+  }
+
+  /** Called once a slide's transition has settled (ROADMAP: "play() can wait until the fade
+   * has finished"). Guarded against a still-in-flight arrival that's since been superseded by
+   * further navigation (rapid taps), so a stale activation never lands on the wrong slide. */
+  private activateArrivalVideo(slide: number): void {
+    if (!this.stage || this.destSlide !== slide) return;
+    this.videoPlayer.activateOnArrival(this.deck, this.stage, slide, this.currentVideoLogCtx());
   }
 
   /** A poll/rating option tapped on Home that isn't also a button (see `homeButtonIds`): no
@@ -577,6 +625,19 @@ export class KioskController {
       this.navigateTo(navLink, now);
       return;
     }
+
+    // Video is checked after every link, not before: a large or full-bleed video must never
+    // swallow a tap on a home/back/nav link drawn over (or under) it. A tap on a video that
+    // isn't already the active one starts/switches it and is consumed here; a tap on the
+    // already-active video falls through to tap-anywhere/timeout handling below, exactly like
+    // a tap that hit nothing at all (that handling is a no-op on the timeout side while the
+    // video is actually playing, decision 3).
+    const videoHit = this.hitTestVideo(px, py, slide);
+    if (videoHit && videoHit.def.id !== this.videoPlayer.activeId) {
+      this.videoPlayer.activateTapped(this.deck, videoHit, slide, this.currentVideoLogCtx());
+      return;
+    }
+
     if (this.config.returnMethods.tapAnywhere) {
       this.returnHome('tap', now);
       return;
@@ -620,6 +681,9 @@ export class KioskController {
     const fromSlide = this.destSlide;
     if (fromSlide === null) return;
     this.hideThanksImmediately();
+    // Leaving fromSlide: deactivate whatever video was playing there (logs video_end itself
+    // if it had any watched time) before the slide changes under it.
+    this.videoPlayer.deactivate();
     const dwellMs = Math.max(0, Math.round(now - this.slideEnteredAt));
 
     this.log({
@@ -634,7 +698,8 @@ export class KioskController {
 
     this.destSlide = target;
     this.slideEnteredAt = now;
-    void this.stage?.show(target, { type: this.config.transition, ms: this.config.transitionMs });
+    void this.stage?.show(target, { type: this.config.transition, ms: this.config.transitionMs })
+      .then(() => this.activateArrivalVideo(target));
     this.showGlow(target);
     this.setupFallbackHomeButton();
     this.startDestinationTimer();
@@ -644,6 +709,8 @@ export class KioskController {
     const slide = this.destSlide;
     this.clearDestinationTimers();
     this.hideThanksImmediately();
+    // Leaving the destination slide entirely (logs video_end itself if there's watched time).
+    this.videoPlayer.deactivate();
     const dwellMs = Math.max(0, Math.round(now - this.visitStartedAt));
 
     this.log({
@@ -694,6 +761,26 @@ export class KioskController {
   }
 
   private resetDestinationTimer(): void {
+    if (this.mode !== 'destination') return;
+    // Decision 3: the timeout stays paused while the active video is actually playing; taps
+    // during playback (links, polls, tap-anywhere) must not restart it. It resumes via
+    // resumeTimeoutAfterVideo() (onFinished/onStalled/onPaused), not here.
+    if (this.videoPlayer.isPlaying) return;
+    this.startDestinationTimer();
+  }
+
+  /** VideoPlayer.onPlaying: the active video's `playing` event fired (initial start, or
+   * resuming after an external pause). Pauses the destination timeout and hides the idle
+   * countdown, per decision 3. */
+  private pauseTimeoutForVideo(): void {
+    this.clearDestinationTimers();
+  }
+
+  /** VideoPlayer.onFinished/onStalled/onPaused: the active video finished (or a loop's first
+   * play completed), gave up, or was paused externally (screen lock, app switch, Control
+   * Center). Restarts the destination timeout from the full timeoutSec so a `timeoutSec`-only
+   * kiosk is never trapped waiting for a video that isn't coming back on its own. */
+  private resumeTimeoutAfterVideo(): void {
     if (this.mode !== 'destination') return;
     this.startDestinationTimer();
   }

@@ -1169,3 +1169,47 @@ describe('computeStats: attract loop', () => {
     expect(totalAttractMs).toBe(90_000); // 09:01-09:02 (closed by the 2nd start) + 09:02-09:02:30
   });
 });
+
+describe('computeStats: video (feature H)', () => {
+  function videoEnd(ts: string, slide: number, watchedMs: number, completed: boolean): LogEvent {
+    return { ts, session_id: SID, event: 'video_end', slide_from: slide, watched_ms: watchedMs, completed };
+  }
+
+  it('is empty with no video_end events', () => {
+    const stats = computeStats([press('b1', '2026-10-14T09:00:00.000+00:00')], {});
+    expect(stats.videos).toEqual([]);
+  });
+
+  it('aggregates plays, median watched time and completed % per slide', () => {
+    const events = [
+      videoEnd('2026-10-14T09:00:00.000+00:00', 2, 10_000, true),
+      videoEnd('2026-10-14T09:01:00.000+00:00', 2, 20_000, true),
+      videoEnd('2026-10-14T09:02:00.000+00:00', 2, 5_000, false),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.videos).toHaveLength(1);
+    expect(stats.videos[0]).toMatchObject({ slide: 2, plays: 3, medianWatchedMs: 10_000 });
+    expect(stats.videos[0].completedPct).toBeCloseTo((2 / 3) * 100, 5);
+  });
+
+  it('keeps separate slides in ascending order', () => {
+    const events = [
+      videoEnd('2026-10-14T09:00:00.000+00:00', 4, 1000, true),
+      videoEnd('2026-10-14T09:01:00.000+00:00', 2, 2000, false),
+    ];
+    const stats = computeStats(events, {});
+    expect(stats.videos.map((v) => v.slide)).toEqual([2, 4]);
+  });
+
+  it('treats a missing/non-finite watched_ms as 0 rather than throwing', () => {
+    const events: LogEvent[] = [{ ts: '2026-10-14T09:00:00.000+00:00', session_id: SID, event: 'video_end', slide_from: 3, completed: false }];
+    const stats = computeStats(events, {});
+    expect(stats.videos).toEqual([{ slide: 3, plays: 1, medianWatchedMs: 0, completedPct: 0 }]);
+  });
+
+  it('ignores a video_end with no slide_from (nothing to attribute it to)', () => {
+    const events: LogEvent[] = [{ ts: '2026-10-14T09:00:00.000+00:00', session_id: SID, event: 'video_end', watched_ms: 1000, completed: true }];
+    const stats = computeStats(events, {});
+    expect(stats.videos).toEqual([]);
+  });
+});

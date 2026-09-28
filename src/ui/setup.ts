@@ -4,7 +4,7 @@
  */
 import type { Deck, Issue, KioskConfig, ButtonDef, PollOptionDef, Rect, GlowConfig, AttractConfig } from '../types';
 import { defaultConfig, pollLabelKey, GLOW_INTENSITY_MIN, GLOW_INTENSITY_MAX, GLOW_PERIOD_MIN_MS, GLOW_PERIOD_MAX_MS } from '../types';
-import { parsePptx, validateDeck } from '../pptx';
+import { parsePptx, validateDeck, totalVideoBytes } from '../pptx';
 import { SlideStage, renderThumbnail, rasterizeDeck, releaseThumbnails } from '../render';
 import { checklist, acquireWakeLock } from '../kiosk';
 import { applyGlowStyle, createGlowLayer } from '../kiosk/glow';
@@ -87,6 +87,7 @@ const ISSUE_LABELS: Record<Issue['code'], string> = {
   poll_duplicate_choice: 'Duplicate poll choice',
   poll_bad_rating: 'Non-numeric rating choice',
   poll_mixed_kind: 'Poll mixes vote and rating',
+  large_video: 'Large video total',
 };
 
 export class SetupScreen {
@@ -251,9 +252,13 @@ export class SetupScreen {
     }
     const errors = this.issues.filter((i) => i.severity === 'error');
     const warnings = this.issues.filter((i) => i.severity === 'warning');
+    // Videos count toward the 100 MB deck limit already; this is the video-specific total the
+    // large_video warning refers to (SPEC "Admin setup flow"), shown whenever the deck has any.
+    const videoBytes = this.deck ? totalVideoBytes(this.deck) : 0;
 
     return h('section', { class: 'setup-step', 'data-step': 'check' }, [
       h('h2', {}, ['2. Check']),
+      videoBytes > 0 ? h('p', { class: 'muted' }, [`Total video size: ${fmtBytes(videoBytes)}`]) : null,
       errors.length === 0 && warnings.length === 0
         ? h('p', { class: 'issue-ok' }, ['No issues found.'])
         : null,
