@@ -173,6 +173,7 @@ export async function loadDeck(pkg: Pkg, fileName: string): Promise<{ deck: Deck
       pkg,
       issues,
       slideIndex,
+      slideDoc: doc,
     };
 
     const slideElements = await parseShapeChildren(spTree!, ctx);

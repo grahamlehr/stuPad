@@ -265,6 +265,51 @@ describe('buildPdf: exact page counts', () => {
   });
 });
 
+describe('buildPdf: Video section (feature H)', () => {
+  it('adds no extra page when there are no video_end events', async () => {
+    const deck = makeDeck(['b1']);
+    const config = defaultConfig('demo.pptx');
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', visit_id: 'v1', event: 'button_press', button_id: 'b1', button_label: 'A' },
+      { ts: '2026-10-14T09:00:10.000+00:00', session_id: 's1', visit_id: 'v1', event: 'return_home', method: 'tap', dwell_ms: 10000 },
+    ];
+    expect(await countPdfPages(await buildPdf(events, deck, config))).toBe(4);
+  });
+
+  it('adds a "Video" page (with no nav taps) titled "Video", not "Slides and paths"', async () => {
+    const deck = makeDeck(['b1']);
+    const config = defaultConfig('demo.pptx');
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', visit_id: 'v1', event: 'button_press', button_id: 'b1', button_label: 'A' },
+      { ts: '2026-10-14T09:00:10.000+00:00', session_id: 's1', visit_id: 'v1', event: 'return_home', method: 'tap', dwell_ms: 10000 },
+      { ts: '2026-10-14T09:00:05.000+00:00', session_id: 's1', event: 'video_end', slide_from: 2, watched_ms: 12345, completed: true },
+    ];
+    const blob = await buildPdf(events, deck, config);
+    expect(await countPdfPages(blob)).toBe(5);
+    const text = await extractPdfText(blob);
+    expect(text).toContain('(Video)');
+    expect(text).not.toContain('(Slides and paths)');
+    expect(text).toContain('(Slide 2)');
+  });
+
+  it('shows the Video section on the "Slides and paths" page when nav taps are also present', async () => {
+    const deck = makeDeck(['b1']);
+    const config = defaultConfig('demo.pptx');
+    const events: LogEvent[] = [
+      { ts: '2026-10-14T09:00:00.000+00:00', session_id: 's1', visit_id: 'v1', event: 'button_press', button_id: 'b1', button_label: 'A', slide_from: 1, slide_to: 2 },
+      { ts: '2026-10-14T09:00:05.000+00:00', session_id: 's1', visit_id: 'v1', event: 'slide_nav', slide_from: 2, slide_to: 3, dwell_ms: 5000 },
+      { ts: '2026-10-14T09:00:12.000+00:00', session_id: 's1', visit_id: 'v1', event: 'return_home', method: 'tap', dwell_ms: 12000, slide_from: 3, slide_to: 1 },
+      { ts: '2026-10-14T09:00:03.000+00:00', session_id: 's1', event: 'video_end', slide_from: 2, watched_ms: 4000, completed: false },
+    ];
+    const blob = await buildPdf(events, deck, config);
+    // Same single combined page as the plain nav-taps case (no extra page for Video on top).
+    expect(await countPdfPages(blob)).toBe(5);
+    const text = await extractPdfText(blob);
+    expect(text).toContain('(Slides and paths)');
+    expect(text).toContain('(Video)');
+  });
+});
+
 describe('buildPdf: uptime tile and device name', () => {
   it('shows a rounded uptime % tile on Summary for a clean running span', async () => {
     const deck = makeDeck(['b1']);

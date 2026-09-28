@@ -2,16 +2,38 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Deck, KioskConfig, LogEvent, Slide } from '../../src/types';
+import type { Deck, KioskConfig, LogEvent, Slide, VideoElement, MediaItem } from '../../src/types';
 import { defaultConfig, SLIDE_W } from '../../src/types';
+import type { StageVideo } from '../../src/render';
+import { stubObjectUrl } from '../render/setup-url';
 
 // -------------------------------------------------------------- mock render
+
+/** A real jsdom <video> with play/pause/load stubbed, matching src/kiosk/video.ts's own test
+ * doubles: jsdom's own HTMLMediaElement methods just log "not implemented" and no-op/return
+ * undefined, which VideoPlayer already treats as "no Promise to await": good enough for
+ * tests that dispatch events by hand instead of relying on real playback. */
+function stubVideoEl(): HTMLVideoElement {
+  const el = document.createElement('video');
+  el.play = vi.fn(() => Promise.resolve());
+  el.pause = vi.fn();
+  el.load = vi.fn();
+  return el;
+}
 
 class MockSlideStage {
   current = 1;
   overlay: HTMLElement;
   showCalls: { index: number; transition?: unknown }[] = [];
   destroyed = false;
+  /** When true, `show()` doesn't resolve on its own: the test resolves each call in turn via
+   * `resolveNextShow()`, so a tap that lands while the "arrival" `.then()` is still pending can
+   * be exercised deterministically (see the video "arrival race" tests). */
+  manualShow = false;
+  private readonly pendingShowResolvers: (() => void)[] = [];
+  /** One stub <video> per VideoElement found at the top level of each slide (deep enough for
+   * every test in this file; none of them nest a video inside a group). */
+  private readonly videosBySlide: StageVideo[][];
 
   constructor(
     public container: HTMLElement,
@@ -19,17 +41,33 @@ class MockSlideStage {
   ) {
     this.overlay = document.createElement('div');
     container.appendChild(this.overlay);
+    this.videosBySlide = deck.slides.map((slide) =>
+      slide.elements
+        .filter((el): el is VideoElement => el.kind === 'video')
+        .map((def) => ({ el: stubVideoEl(), def })),
+    );
   }
 
   show(index: number, transition?: unknown): Promise<void> {
     this.current = index;
     this.showCalls.push({ index, transition });
+    if (this.manualShow) {
+      return new Promise((resolve) => this.pendingShowResolvers.push(resolve));
+    }
     return Promise.resolve();
+  }
+
+  resolveNextShow(): void {
+    this.pendingShowResolvers.shift()?.();
   }
 
   toSlide(clientX: number, clientY: number): { px: number; py: number; xPct: number; yPct: number } | null {
     if (clientX < 0 || clientY < 0 || clientX > SLIDE_W || clientY > this.deck.height) return null;
     return { px: clientX, py: clientY, xPct: (clientX / SLIDE_W) * 100, yPct: (clientY / this.deck.height) * 100 };
+  }
+
+  videosOn(index: number): StageVideo[] {
+    return this.videosBySlide[index - 1] ?? [];
   }
 
   fit(): void {}
@@ -1095,6 +1133,390 @@ describe('KioskController: polls and ratings', () => {
 
     controller.stop();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------- video
+
+function videoMedia(): Record<string, MediaItem> {
+  return {
+    'ppt/media/media1.mp4': { blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'video/mp4' }), mime: 'video/mp4' },
+    'ppt/media/media2.mp4': { blob: new Blob([new Uint8Array([4, 5, 6])], { type: 'video/mp4' }), mime: 'video/mp4' },
+    'ppt/media/image1.png': { blob: new Blob([new Uint8Array([7])], { type: 'image/png' }), mime: 'image/png' },
+  };
+}
+
+function videoEl(overrides: Partial<VideoElement> & { id: string }): VideoElement {
+  return {
+    kind: 'video',
+    name: 'Video',
+    xfrm: { x: 0, y: 0, w: 400, h: 300, rot: 0, flipH: false, flipV: false },
+    mediaKey: 'ppt/media/media1.mp4',
+    posterKey: 'ppt/media/image1.png',
+    loop: false,
+    autoplay: true,
+    ...overrides,
+  };
+}
+
+/** Home (b1 -> slide 2, b2 -> slide 3), a home link back on both destinations, and a video on
+ * slide 2 (autoplay by default) and slide 3: enough for every video wiring test below. */
+function fakeVideoDeck(slide2Video: Partial<VideoElement> = {}, extraSlide3Elements: VideoElement[] = []): Deck {
+  return {
+    id: 'deck-video',
+    fileName: 'video.pptx',
+    parsedAt: '2026-09-24T00:00:00.000Z',
+    slideWidthEmu: 12192000,
+    slideHeightEmu: 6858000,
+    height: 1080,
+    slides: [
+      { index: 1, background: { type: 'none' }, elements: [] },
+      { index: 2, background: { type: 'none' }, elements: [videoEl({ id: 'v2', ...slide2Video })] },
+      { index: 3, background: { type: 'none' }, elements: extraSlide3Elements },
+    ],
+    buttons: [
+      { id: 'b1', shapeName: 'BTN_1', text: 'One', defaultLabel: 'One', targetSlide: 2, bounds: { x: 100, y: 100, w: 200, h: 100 } },
+      { id: 'b2', shapeName: 'BTN_2', text: 'Two', defaultLabel: 'Two', targetSlide: 3, bounds: { x: 400, y: 100, w: 200, h: 100 } },
+    ],
+    homeLinks: [
+      { slide: 2, id: 'h2', bounds: { x: 0, y: 900, w: 150, h: 100 } },
+      { slide: 3, id: 'h3', bounds: { x: 0, y: 900, w: 150, h: 100 } },
+    ],
+    navLinks: [],
+    backLinks: [],
+    pollOptions: [],
+    media: videoMedia(),
+    fonts: [],
+  };
+}
+
+describe('KioskController: video playback', () => {
+  let root: HTMLElement;
+  let logs: Omit<LogEvent, 'ts' | 'session_id'>[];
+  let onAdminRequested: Mock<() => void>;
+  let controller: InstanceType<typeof KioskController>;
+
+  beforeEach(() => {
+    stubObjectUrl();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    logs = [];
+    onAdminRequested = vi.fn<() => void>();
+  });
+
+  afterEach(() => {
+    controller?.stop();
+    root.remove();
+    vi.useRealTimers();
+  });
+
+  async function makeVideoController(deck: Deck, cfgOver: Partial<KioskConfig> = {}) {
+    logs.length = 0;
+    controller = new KioskController({
+      root,
+      deck,
+      config: fakeConfig(cfgOver),
+      sessionId: 'sess-1',
+      log: (e) => logs.push(e),
+      onAdminRequested,
+    });
+    await controller.start();
+    return controller;
+  }
+
+  /** Lets the microtask VideoPlayer.activateOnArrival() is chained onto (after stage.show())
+   * actually run before the next assertion: MockSlideStage.show() resolves immediately, but
+   * still asynchronously. */
+  async function flush(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it('activates the first autoplay video on arrival, once the transition settles', async () => {
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck);
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2
+    await flush();
+
+    const stageVideo = lastStage!.videosOn(2)[0];
+    expect(stageVideo.el.src).toContain('blob:mock');
+    expect(stageVideo.el.play).toBeTruthy();
+  });
+
+  it('does not activate a non-autoplay video on arrival, but a tap on it starts it', async () => {
+    const deck = fakeVideoDeck({ autoplay: false });
+    await makeVideoController(deck);
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+    expect(stageVideo.el.src).toBe('');
+
+    // Tap the video's own bounds (x:0,y:0,w:400,h:300).
+    vi.advanceTimersByTime(200);
+    tap(root, 100, 100);
+    expect(stageVideo.el.src).toContain('blob:mock');
+  });
+
+  it('only one video is ever active: switching to a different video on the same slide deactivates the first', async () => {
+    const other = videoEl({ id: 'v3b', mediaKey: 'ppt/media/media2.mp4', xfrm: { x: 900, y: 0, w: 400, h: 300, rot: 0, flipH: false, flipV: false } });
+    const deck = fakeVideoDeck({}, [videoEl({ id: 'v3a', autoplay: true }), other]);
+    await makeVideoController(deck);
+    tap(root, 450, 130); // b2 -> slide 3
+    await flush();
+    const [first, second] = lastStage!.videosOn(3);
+    expect(first.el.src).toContain('blob:mock'); // v3a autoplayed
+    expect(second.el.src).toBe('');
+
+    vi.advanceTimersByTime(200);
+    tap(root, 1000, 100); // inside v3b's bounds
+    expect(second.el.src).toContain('blob:mock');
+    expect(first.el.hasAttribute('src')).toBe(false);
+  });
+
+  it('leaving the slide (Home link) deactivates the active video: pauses, clears src, calls load()', async () => {
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck);
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+    expect(stageVideo.el.src).toContain('blob:mock');
+
+    vi.advanceTimersByTime(200);
+    tap(root, 50, 950); // home link bounds on slide 2
+    expect(stageVideo.el.hasAttribute('src')).toBe(false);
+  });
+
+  /** Advances the fake clock in <=2s steps, dispatching `timeupdate` on `video` between each
+   * step so VideoPlayer's 6s stall watchdog (src/kiosk/video.ts) never mistakes "no one told it
+   * to advance the clock" for "the decoder is stuck": these tests are about the destination
+   * timeout, not the watchdog, which has its own dedicated tests in tests/kiosk/video.test.ts. */
+  function advancePlaying(video: HTMLVideoElement, totalMs: number): void {
+    let remaining = totalMs;
+    while (remaining > 0) {
+      const step = Math.min(2000, remaining);
+      vi.advanceTimersByTime(step);
+      remaining -= step;
+      if (remaining > 0) video.dispatchEvent(new Event('timeupdate'));
+    }
+  }
+
+  it('pauses the destination timeout while the video plays, and restarts it from the full duration once it ends', async () => {
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck, { timeoutSec: 5, returnMethods: { homeButton: true, tapAnywhere: false, timeout: true } });
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2, starts a 5s timeout
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+
+    stageVideo.el.dispatchEvent(new Event('playing')); // pauses the timeout
+    advancePlaying(stageVideo.el, 10_000); // well past 5s: nothing should happen, the timeout is paused
+    expect(logs.some((l) => l.event === 'return_home')).toBe(false);
+
+    stageVideo.el.dispatchEvent(new Event('ended')); // restarts the timeout from the full 5s
+    vi.advanceTimersByTime(4999);
+    expect(logs.some((l) => l.event === 'return_home')).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(logs.some((l) => l.event === 'return_home')).toBe(true);
+  });
+
+  it('a tap that would otherwise reset the destination timeout does not restart it while the video plays (decision 3)', async () => {
+    // tapAnywhere off: a tap that hits no link/poll/video on the slide falls through to
+    // resetDestinationTimer() (SPEC: "otherwise just reset the timeout"). Decision 3 says that
+    // reset must not happen while the active video is playing.
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck, { timeoutSec: 5, returnMethods: { homeButton: true, tapAnywhere: false, timeout: true } });
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+    stageVideo.el.dispatchEvent(new Event('playing'));
+
+    vi.advanceTimersByTime(200);
+    tap(root, 1500, 500); // outside the video (x:0,y:0,w:400,h:300) and every link: falls through
+    expect(logs.some((l) => l.event === 'return_home')).toBe(false);
+    // If this tap had wrongly restarted the (paused) timer, it would fire around now+5000
+    // (i.e. ~5200 after the button press); it must not, since the timer stayed paused/cleared.
+    advancePlaying(stageVideo.el, 10_000);
+    expect(logs.some((l) => l.event === 'return_home')).toBe(false);
+  });
+
+  it('loop: restarts the timeout only after the first full play, even though playback keeps looping', async () => {
+    const deck = fakeVideoDeck({ loop: true });
+    await makeVideoController(deck, { timeoutSec: 5, returnMethods: { homeButton: true, tapAnywhere: false, timeout: true } });
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y);
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+
+    stageVideo.el.dispatchEvent(new Event('playing'));
+    stageVideo.el.dispatchEvent(new Event('ended')); // lap 1 done -> timeout restarts from 5s
+    stageVideo.el.dispatchEvent(new Event('playing')); // lap 2 starts: must NOT re-pause it
+
+    vi.advanceTimersByTime(5000);
+    expect(logs.some((l) => l.event === 'return_home')).toBe(true);
+  });
+
+  it('an error on the active video resumes the timeout immediately and deactivates it', async () => {
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck, { timeoutSec: 5, returnMethods: { homeButton: true, tapAnywhere: false, timeout: true } });
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y);
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+    stageVideo.el.dispatchEvent(new Event('playing'));
+
+    stageVideo.el.dispatchEvent(new Event('error'));
+
+    expect(stageVideo.el.hasAttribute('src')).toBe(false);
+    vi.advanceTimersByTime(5000);
+    expect(logs.some((l) => l.event === 'return_home')).toBe(true);
+  });
+
+  it('logs video_end (with watched_ms and completed) exactly once when the visitor leaves mid-play', async () => {
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck);
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y);
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+    stageVideo.el.dispatchEvent(new Event('playing'));
+    vi.advanceTimersByTime(3000);
+
+    tap(root, 50, 950); // home link: leaves the slide
+
+    const videoEnds = logs.filter((l) => l.event === 'video_end');
+    expect(videoEnds).toHaveLength(1);
+    expect(videoEnds[0]).toMatchObject({ slide_from: 2, watched_ms: 3000, completed: false, button_id: 'b1', button_label: 'One' });
+  });
+
+  it('never activates a video on Home, even one placed on slide 1', async () => {
+    const deck = fakeVideoDeck();
+    deck.slides[0] = { index: 1, background: { type: 'none' }, elements: [videoEl({ id: 'home-video' })] };
+    await makeVideoController(deck);
+    await flush();
+    const homeVideo = lastStage!.videosOn(1)[0];
+    expect(homeVideo.el.src).toBe('');
+
+    // Go to slide 2 and back Home: still never activated.
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y);
+    await flush();
+    vi.advanceTimersByTime(200);
+    tap(root, 50, 950);
+    await flush();
+    expect(homeVideo.el.src).toBe('');
+  });
+
+  it('never activates a video during the attract loop, even when it cycles onto that slide', async () => {
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck, {
+      attract: { enabled: true, idleSec: 10, mode: 'cycle', slides: [2], slideSec: 4 },
+    });
+    vi.advanceTimersByTime(10_000); // idle timeout on Home -> attract starts, cycling Home/2
+    vi.advanceTimersByTime(4000); // one cycle step: crossfades to slide 2
+
+    const stageVideo = lastStage!.videosOn(2)[0];
+    expect(stageVideo.el.src).toBe('');
+  });
+
+  it('stop() leaves no timer, no src, and every created object URL revoked', async () => {
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck);
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y);
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+    stageVideo.el.dispatchEvent(new Event('playing'));
+
+    controller.stop();
+
+    expect(stageVideo.el.hasAttribute('src')).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a tap that activates a video before the slide-arrival promise resolves does not leak: one URL, one video_end', async () => {
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck);
+    lastStage!.manualShow = true;
+    const createSpy = URL.createObjectURL as unknown as ReturnType<typeof vi.fn>;
+    const revokeSpy = URL.revokeObjectURL as unknown as ReturnType<typeof vi.fn>;
+
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2; stage.show() is now pending
+    vi.advanceTimersByTime(150); // past debounce
+    tap(root, 300, 200); // lands on the video (not a corner) before arrival's .then() has run
+    const stageVideo = lastStage!.videosOn(2)[0];
+    expect(stageVideo.el.src).toContain('blob:mock');
+    expect(createSpy.mock.calls.length).toBe(1);
+
+    lastStage!.resolveNextShow(); // arrival's .then() now runs: activateOnArrival must no-op
+    await flush();
+
+    expect(createSpy.mock.calls.length).toBe(1); // still only the one URL ever created
+    expect(revokeSpy.mock.calls.length).toBe(0); // the tap's own activation was never torn down
+
+    stageVideo.el.dispatchEvent(new Event('playing'));
+    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(200);
+    tap(root, 50, 950); // home link: leaves the slide
+
+    expect(createSpy.mock.calls.length).toBe(revokeSpy.mock.calls.length); // every URL revoked
+    expect(logs.filter((l) => l.event === 'video_end')).toHaveLength(1); // exactly one
+  });
+
+  it('visibilitychange to visible resumes a video an external interruption paused', async () => {
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck);
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y);
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+    stageVideo.el.dispatchEvent(new Event('playing'));
+    stageVideo.el.dispatchEvent(new Event('pause')); // external pause (screen lock, app switch...)
+    await flush();
+    const playCallsBefore = (stageVideo.el.play as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect((stageVideo.el.play as ReturnType<typeof vi.fn>).mock.calls.length).toBe(playCallsBefore + 1);
+  });
+
+  it('a home link overlapping a video returns home and logs video_end once (links win over a full-bleed video)', async () => {
+    const deck = fakeVideoDeck({ xfrm: { x: 0, y: 0, w: 1920, h: 1080, rot: 0, flipH: false, flipV: false } });
+    await makeVideoController(deck);
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y); // -> slide 2
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+    stageVideo.el.dispatchEvent(new Event('playing'));
+    vi.advanceTimersByTime(3000);
+
+    vi.advanceTimersByTime(200);
+    tap(root, 50, 950); // inside both the home link and the now full-bleed video's bounds
+
+    expect(logs.some((l) => l.event === 'return_home')).toBe(true);
+    expect(logs.filter((l) => l.event === 'video_end')).toHaveLength(1);
+  });
+
+  it('a tap on the already-active video falls through past the video check: tapAnywhere on returns home', async () => {
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck, { returnMethods: { homeButton: true, tapAnywhere: true, timeout: true } });
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y);
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+    stageVideo.el.dispatchEvent(new Event('playing'));
+
+    vi.advanceTimersByTime(200);
+    tap(root, 300, 200); // inside the active video's own bounds (not a corner, no other link there)
+
+    expect(logs.some((l) => l.event === 'return_home')).toBe(true);
+  });
+
+  it('a tap on the already-active video with tapAnywhere off does nothing harmful (falls through to a no-op)', async () => {
+    const deck = fakeVideoDeck();
+    await makeVideoController(deck, { timeoutSec: 5, returnMethods: { homeButton: true, tapAnywhere: false, timeout: true } });
+    tap(root, CENTER_BUTTON.x, CENTER_BUTTON.y);
+    await flush();
+    const stageVideo = lastStage!.videosOn(2)[0];
+    stageVideo.el.dispatchEvent(new Event('playing'));
+
+    vi.advanceTimersByTime(200);
+    expect(() => tap(root, 300, 200)).not.toThrow();
+
+    expect(logs.some((l) => l.event === 'return_home')).toBe(false);
+    expect(stageVideo.el.hasAttribute('src')).toBe(true); // still active, untouched
   });
 });
 

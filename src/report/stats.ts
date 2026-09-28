@@ -100,6 +100,20 @@ export interface PollOptionMeta {
   label: string;
 }
 
+/**
+ * Aggregate `video_end` results for one slide (ROADMAP "Video on destination slides" / PDF
+ * "Video" section): plays, median watched time, and the share that watched to the end.
+ * `plays` is every `video_end` event for the slide (one per activation, per
+ * `src/kiosk/video.ts`); `completedPct` is `completed` events over `plays`.
+ */
+export interface VideoStat {
+  slide: number;
+  plays: number;
+  medianWatchedMs: number;
+  /** % of plays with `completed: true`, 0..100 */
+  completedPct: number;
+}
+
 /** One choice's tally within a `PollStat`. */
 export interface PollChoiceStat {
   choice: string;
@@ -277,6 +291,8 @@ export interface ReportStats {
   /** one entry per poll seen (via `ComputeStatsOpts.pollOptions` and/or `vote` events),
    * ordered per `ComputeStatsOpts.pollOptions` then first-seen in events; see `PollStat`. */
   polls: PollStat[];
+  /** one entry per slide with any `video_end` event, ascending by slide number; see `VideoStat`. */
+  videos: VideoStat[];
 }
 
 function emptyUptime(): UptimeStats {
@@ -589,6 +605,7 @@ export function computeStats(
       homeVotes: 0,
       interactions: 0,
       polls: buildPollStats(new Map(), opts),
+      videos: [],
     };
   }
 
@@ -646,6 +663,12 @@ export function computeStats(
   let homeVotes = 0;
   // poll -> choice -> vote count, across both home and visit votes.
   const pollCounts = new Map<string, Map<string, number>>();
+
+  // ---- video (feature H) ----
+  // slide -> every video_end's watched_ms, and how many of those were completed. Only these
+  // small per-slide aggregates are kept (like durationsBySlide above), not raw events.
+  const videoWatchedBySlide = new Map<number, number[]>();
+  const videoCompletedBySlide = new Map<number, number>();
 
   // open visits: visit_id -> { buttonId, ts }
   const openVisits = new Map<string, { buttonId: string; ts: string }>();
@@ -884,6 +907,12 @@ export function computeStats(
         pollCounts.set(ev.poll, choices);
       }
       choices.set(ev.choice, (choices.get(ev.choice) ?? 0) + 1);
+    } else if (ev.event === 'video_end' && ev.slide_from !== undefined) {
+      const slide = ev.slide_from;
+      const list = videoWatchedBySlide.get(slide) ?? [];
+      list.push(Number.isFinite(ev.watched_ms) ? (ev.watched_ms as number) : 0);
+      videoWatchedBySlide.set(slide, list);
+      if (ev.completed) videoCompletedBySlide.set(slide, (videoCompletedBySlide.get(slide) ?? 0) + 1);
     }
   }
 
@@ -988,6 +1017,19 @@ export function computeStats(
   const interactions = totalVisits + homeVotes;
   const polls = buildPollStats(pollCounts, opts);
 
+  const videos: VideoStat[] = Array.from(videoWatchedBySlide.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([slide, watched]) => {
+      const plays = watched.length;
+      const completed = videoCompletedBySlide.get(slide) ?? 0;
+      return {
+        slide,
+        plays,
+        medianWatchedMs: median(watched),
+        completedPct: plays > 0 ? (completed / plays) * 100 : 0,
+      };
+    });
+
   return {
     sessionId,
     firstTs,
@@ -1018,5 +1060,6 @@ export function computeStats(
     homeVotes,
     interactions,
     polls,
+    videos,
   };
 }

@@ -16,7 +16,7 @@ Goals for v1:
 - Log every interaction with a timestamp to on-device storage, surviving app restarts.
 - Let the admin exit via a secret tap sequence and export a CSV log and a PDF summary.
 
-Out of scope for v1: video and animation playback, syncing logs across multiple iPads, and any server-side component after setup. Destination slides may link onward to further slides (see "PowerPoint template rules" and "Kiosk mode behaviour" below); a slide reachable only through such a chain still needs a way back to Home, which the kiosk provides as a fallback if the deck doesn't.
+Out of scope for v1: animation playback and audio, syncing logs across multiple iPads, and any server-side component after setup. Destination slides may link onward to further slides (see "PowerPoint template rules" and "Kiosk mode behaviour" below); a slide reachable only through such a chain still needs a way back to Home, which the kiosk provides as a fallback if the deck doesn't.
 
 ## Users and roles
 
@@ -68,6 +68,8 @@ Buttons are ordinary shapes on slide 1 with PowerPoint's own "Link to: Slide N" 
 
 **Polls and ratings.** A shape named `VOTE_<poll>_<choice>` (or `RATE_<poll>_<choice>` for a numeric rating, e.g. "Rate this stand 1 to 5") is a poll option, e.g. `VOTE_Topic_Sustainability` or `RATE_Stand_4`. It may sit on any slide, including slide 1 alongside buttons. The poll name (the segment right after the prefix) can't contain underscores; the choice name (everything after that) may. If it also has a slide link (an ordinary "Link to: Slide N", or a "Last Slide Viewed" back link), the kiosk records the vote and then follows the link as it would for any other linked shape, so "vote then see a thank-you slide" needs no new concept. On the home slide, a vote shape only acts as a button (and counts toward the two-button minimum) when its link goes to a later slide, exactly like an ordinary button; a home-slide vote shape with no link, one linking to slide 1 itself, or one using "Last Slide Viewed", is not a button, does not count toward the minimum, and is a plain vote with the Home cooldown described below (see "Kiosk mode behaviour"). The same poll name used with both `VOTE_` and `RATE_` prefixes is one poll, warned about and treated as a plain vote (no mean) rather than a rating. Warnings: a poll with only one option, the same choice used twice in one poll, and a `RATE_` choice that isn't a number (it's still counted, just left out of the mean).
 
+**Video.** Insert a video "From File" (This Device) so PowerPoint embeds it in the .pptx; a video inserted as an online/linked file is not embedded, so the kiosk shows its poster frame only, with an `unsupported_element` warning at Check. Supported formats are mp4, m4v and mov; anything else also falls back to the poster with a warning. Playback options (play automatically vs. on click, and "Loop until stopped") are set in PowerPoint's own Animations/Playback settings for the video; the kiosk reads them at parse time. See "Video" under "Kiosk mode behaviour" for how it plays.
+
 **Supported content**
 
 | Element | Supported | Notes |
@@ -80,7 +82,8 @@ Buttons are ordinary shapes on slide 1 with PowerPoint's own "Link to: Slide N" 
 | Tables | Basic | Cell text and fills only |
 | Charts, SmartArt | No | Paste as images first |
 | Animations, transitions | No | Ignored; app uses its own fade |
-| Video, audio | No | Candidate for v2 |
+| Video | Yes | Destination slides only; must be embedded (not a linked file) and mp4, m4v or mov; plays muted; see "Video" under Kiosk mode behaviour |
+| Audio | No | Candidate for v2 |
 
 **Fonts.** Use the web fonts bundled with the app (Inter, Lato, Montserrat, Open Sans, Roboto; Latin scripts) or iPad system fonts. Anything else falls back to a system font and is flagged at setup. Fonts embedded in the .pptx are not read, so embedding a font does not help.
 
@@ -105,7 +108,7 @@ flowchart LR
     D --> E[Go live:<br/>checklist, start kiosk]
 ```
 
-Validation errors (fewer than 2 buttons, broken links, unreadable file, no slides, file over 100 MB) block go-live. Warnings (missing fonts, unsupported elements, unlinked slides, no way back to slide 1, non-16:9 size, buttons under 44 pt, a shape linked to its own slide) are shown and must be accepted with a checkbox before going live. Invalid settings in Configure also block go-live.
+Validation errors (fewer than 2 buttons, broken links, unreadable file, no slides, file over 100 MB) block go-live. Warnings (missing fonts, unsupported elements, unlinked slides, no way back to slide 1, non-16:9 size, buttons under 44 pt, a shape linked to its own slide, a total embedded video size over 50 MB) are shown and must be accepted with a checkbox before going live. Invalid settings in Configure also block go-live. When the deck has any embedded video, the Check step also shows the total video size (videos count toward the 100 MB deck limit already enforced above).
 
 The preview shows the home slide with each detected button outlined and labelled, plus a thumbnail of every slide (unlinked slides are marked). Tapping a button, nav link or back link in preview navigates as it will in kiosk mode, and "Back to home" returns to slide 1. An "image mode" checkbox rasterises every slide once to a PNG (the fallback above); a slide that cannot be rasterised keeps rendering live and the admin is told how many failed.
 
@@ -154,7 +157,7 @@ stateDiagram-v2
 
 - Full-screen, no browser chrome, no visible UI other than the slide and its buttons.
 - Only detected button areas respond on the home slide; taps elsewhere are logged as "miss" taps but do nothing. A poll/rating option is tested before buttons, so an unlinked one is never logged as a miss tap.
-- On a destination slide, a tap is checked against any poll/rating option on that slide first, then the Home link, then any back links, then any nav links; a nav link tap logs `slide_nav` and moves to the target slide without leaving destination mode.
+- On a destination slide, a tap is checked against any poll/rating option on that slide first, then the Home link, then any back links, then any nav links, then any video on the slide (see "Video" below); a nav link tap logs `slide_nav` and moves to the target slide without leaving destination mode. Checking links before video means a link drawn over (or under) a video always wins, so a large or full-bleed video can never swallow a tap meant for a link.
 - A back link tap returns to the previous slide of the current visit (logged as `slide_nav`), or returns Home (logged as `return_home` with method `home_button`) if the visit started on this slide. The history belongs to one visit: it is cleared on every return to Home, including a timeout.
 - The timeout timer starts when a destination slide appears and resets on any tap on that slide, including a nav link tap that moves to a further slide.
 - If a destination slide has no shape linking back to slide 1 or back link (whether it's a direct destination or reached through a chain of nav links) and the Home button return method is enabled, the kiosk shows a discreet fallback Home button so no slide is a dead end.
@@ -167,6 +170,8 @@ stateDiagram-v2
 
 **Polls and ratings.** A poll/rating option is hit-tested before every link on a destination slide, and before buttons on Home, so its vote is recorded even when the same shape is also a link or a button. It's one vote per poll per visit: once a poll has been voted in during the current visit, a repeat tap on any of its options logs nothing further (though a linked option's own link is still followed, and press feedback still shows). A new visit can vote in the same poll again. If the option is linked, the kiosk logs the vote and then follows the link exactly as it would for a plain link (a `button_press` on Home, or `slide_nav`/`return_home` on a destination slide), so "vote then see a thank-you slide" needs no extra concept. If it isn't linked, the kiosk shows press feedback and a brief "Thanks" overlay (1.5 s) instead. On Home, whether a vote shape takes the button path is decided the same way as for the two-button minimum above: only a link to a later slide makes it a button. A vote shape with no link, or one linking to slide 1 itself or using "Last Slide Viewed" (neither of which is a button), has no visit to dedupe against: the debounce still applies, and in addition each poll gets its own 3-second cooldown, so a rapid flurry of taps on the same option counts as one vote; press feedback and the Thanks overlay always show, but the vote itself, and re-arming the attract idle timer, only happen once the cooldown has passed, and a suppressed tap never logs a miss tap. A vote shape that is a button (its link goes to a later slide) starts a normal visit like any other button press, so it needs no separate cooldown. In attract mode, the wake tap never presses anything (see below) and so never votes either, even directly over a poll option.
 - Home-slide votes with no link are counted in the report as interactions (see "Exit and reporting"), not as visits: they have no destination, dwell or return, so they don't affect average dwell, Return behaviour or Button share.
+
+**Video.** A video always plays muted, whatever the deck's own volume setting; there is no volume control for it. On arrival at a destination slide, its first autoplay video (in element order) starts playing once the slide's transition has settled; a video set to play on click instead waits for a tap on it (a tap on a video that isn't already playing is checked last on that slide, after every link, so a link drawn over a video always wins; a tap on the video that's already playing falls through to tap-anywhere/timeout handling like any other tap). Only one video is ever playing at a time: a tap on a different video on the same slide switches to it, and leaving the slide (by any means) stops whichever video was playing. While the active video is playing, the return-to-home timeout and idle warning are paused (decision 3); they restart at the full configured timeout when the video finishes, or, for a looping video, after its first full play (a looping video never naturally ends, so the timeout otherwise never runs again). If iOS itself pauses the video (screen lock, switching app, Control Center), the timeout resumes immediately rather than waiting for a pause the visitor may never come back to undo; if playback then resumes (the app returns to the foreground), the timeout pauses again, unless the video had already finished its one timeout-pausing play. Returning to the app also resumes a video iOS paused this way on its own. A video that stalls or fails to play resumes the timeout immediately and falls back to its poster frame, so a broken file can never trap the kiosk on a slide. Home (slide 1) and the attract loop never play a video, even if one is placed there: both always show its poster frame. Each play is logged as `video_end` once the visitor leaves the slide or the video finishes (see "Interaction logging and data model").
 
 **Attract loop.** When the attract setting is on, an idle timer starts once the kiosk is on Home and has nothing else to do: after kiosk start, after a miss tap, after returning to Home by any method, and after waking from a previous attract period. A button press (which leaves Home) or a tap that continues the secret sequence (which counts as activity but keeps the admin's attempt going) each cancel or restart it, so an admin working the exit sequence never accidentally triggers the loop underneath themselves. When the timer fires, the kiosk logs `attract_start` and enters Attract mode:
 
@@ -204,6 +209,7 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | `attract_start` | The idle timer fires on Home and the attract loop begins |
 | `attract_end` | A tap wakes the kiosk from the attract loop; `dwell_ms` is the time spent in that attract period. Not logged when the loop is ended by `kiosk_stop`, `kiosk_start` or `app_resume` instead of a tap |
 | `vote` | A poll/rating option (`VOTE_`/`RATE_` shape) is tapped and its poll hasn't already been voted in during this visit; `poll` and `choice` name the option. Has a `visit_id` for a destination-slide vote or a linked home vote (the same visit a `button_press`/`slide_nav`/`return_home` would use); no `visit_id` for an unlinked home vote |
+| `video_end` | A video finishes (or, for a looping video, is left while still playing), or the visitor leaves the slide it was playing on with any watched time; not logged for a video that was never actually played. `watched_ms` and `completed` record how much of it was seen |
 
 **Record fields**
 
@@ -221,6 +227,8 @@ Every event is written to IndexedDB the moment it happens, as one append-only re
 | `dwell_ms` | integer; on `return_home`, time for the whole visit; on `slide_nav`, time spent on just the slide being left; on `attract_end`, time spent in the attract period | 18420 |
 | `x`, `y` | tap position as % of slide, rounded to 0.1, miss taps only | 12.5, 88.0 |
 | `poll`, `choice` | poll and choice names from the shape's `VOTE_`/`RATE_` name, `vote` events only | Topic, Net_Zero |
+| `watched_ms` | integer; actual playing time, `video_end` only | 18420 |
+| `completed` | boolean; whether the video reached its end at least once (a looping video's first full play counts), `video_end` only | true |
 
 `dwell_ms` on each return gives time spent per destination, which is the most useful engagement measure after raw press counts. `slide_nav` events let a report break that down further into time spent per slide within a multi-slide visit, and count arrivals at each slide.
 
@@ -238,13 +246,14 @@ The panel shows the current session's presses, visits, average dwell and miss ta
 
 **CSV**
 
-One row per event, all fields from the data model, with a header row. RFC 4180 quoting, CRLF line endings, and UTF-8 with a byte-order mark so Excel reads non-ASCII labels correctly. `poll` and `choice` are appended at the end, after `x`/`y`, so a spreadsheet that reads earlier columns by position is unaffected. File name: `<session-name>_<yyyy-mm-dd-hhmm>.csv`.
+One row per event, all fields from the data model, with a header row. RFC 4180 quoting, CRLF line endings, and UTF-8 with a byte-order mark so Excel reads non-ASCII labels correctly. `poll`, `choice`, `watched_ms` and `completed` are appended at the end, after `x`/`y`, so a spreadsheet that reads earlier columns by position is unaffected. File name: `<session-name>_<yyyy-mm-dd-hhmm>.csv`.
 
 ```csv
-id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,method,dwell_ms,x,y,poll,choice
-1042,2026-10-14T10:32:07.412+01:00,7f3c,a91e,button_press,4,Sustainability,1,3,,,,,,
-1043,2026-10-14T10:32:25.832+01:00,7f3c,a91e,return_home,,,3,1,timeout,18420,,,,
-1044,2026-10-14T10:32:40.000+01:00,7f3c,,vote,,,3,,,,,,Topic,Net_Zero
+id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,method,dwell_ms,x,y,poll,choice,watched_ms,completed
+1042,2026-10-14T10:32:07.412+01:00,7f3c,a91e,button_press,4,Sustainability,1,3,,,,,,,,
+1043,2026-10-14T10:32:25.832+01:00,7f3c,a91e,return_home,,,3,1,timeout,18420,,,,,,
+1044,2026-10-14T10:32:40.000+01:00,7f3c,,vote,,,3,,,,,,Topic,Net_Zero,,
+1045,2026-10-14T10:32:55.000+01:00,7f3c,a91e,video_end,4,Sustainability,3,,,,,,,,18420,true
 ```
 
 **PDF report (A4 landscape)**
@@ -256,7 +265,7 @@ id,ts,session_id,visit_id,event,button_id,button_label,slide_from,slide_to,metho
 | 3. Home slide taps (only when there are miss taps) | Heatmap of where visitors tapped and missed on the home slide (48 x 27 grid of cells, white-to-blackberry ramp), with each button's bounds drawn as an outline and label over it, and the home thumbnail underneath when one is available. Caption: miss taps as a share of all home-slide taps (button presses + miss taps). Miss taps during the attract loop are never logged, so they never appear here |
 | 4. Activity over time | Stacked bar chart of presses per interval, one colour per button, with a light shaded band behind any bucket that overlapped an attract period (opacity scaled by how much of the bucket's own span was in attract mode) and a legend entry "Attract loop" when any bucket has one, plus a thin up/down strip underneath it on the same time axis (green for a monitored running span, muted red for a downtime gap, neutral grey for an unmonitored span with no heartbeat data, light grey outside any span), legend "Running / Down / Stopped" plus "No heartbeat data" when the scope has an unmonitored span. The interval is the finest of 5, 15, 30, 60, 120, 240 min or 1 day that keeps the chart to 48 bars or fewer |
 | 5. Return behaviour | Split of returns by Home button, tap and timeout; share of visits ending by timeout per button |
-| 6. Slides and paths (only when there are onward nav taps) | Left: horizontal bars of median time spent per slide, plus a second bar excluding timeout-ended visits. Right: a table of the most common routes through the deck ("3 → 4 → 5"), each with a count and %, top 8 plus an "Other" row |
+| 6. Slides and paths (when there are onward nav taps, any video plays, or both) | With onward nav taps: left, horizontal bars of median time spent per slide, plus a second bar excluding timeout-ended visits; right, a table of the most common routes through the deck ("3 → 4 → 5"), each with a count and %, top 8 plus an "Other" row. When the deck has any video plays, a "Video" table (Slide, Plays, Median watched, Watched to end) is added below the paths table; if there are no onward nav taps at all, the whole page is just this Video table, titled "Video" instead of "Slides and paths" |
 | 7. Poll results (one page per poll with at least one vote) | Title "Poll results: \<poll label\>"; a horizontal bar chart of the poll's choices with count and %; for a `RATE_` poll, also "Mean score 4.2 (n = 37)" (numeric choices only; a non-numeric `RATE_` choice is counted in the bars but excluded from the mean). Counts every vote, home and destination alike |
 | 8. Hour-by-day (multi-day only) | Heatmap of presses by hour and day |
 
@@ -289,7 +298,7 @@ A `heartbeat` extends the report's date/time range (`firstTs`/`lastTs`, and so t
 **Assumptions made in this draft**
 
 - One iPad per deployment; no merging of logs across devices.
-- Static slides only; no video, audio or animation in v1.
+- Static slides only, plus video on destination slides (see "Video" under Kiosk mode behaviour); no audio or animation in v1.
 - Landscape 16:9 decks.
 - Internet is available once for install and setup, never during the event.
 
@@ -297,7 +306,6 @@ A `heartbeat` extends the report's date/time range (`firstTs`/`lastTs`, and so t
 
 - [ ] What is the typical use: exhibition stand, poll or vote, wayfinding, content menu? This shapes the report's headline metric.
 - [ ] Is there ever more than one iPad at the same stand, and should reports combine them?
-- [ ] Do destination slides need video (the most common ask for v2)?
 - [ ] Branding on the PDF report: agency, client, or neutral? (Today the admin UI and template are Emota-branded; the PDF is neutral apart from the GGPad footer and a blackberry heatmap.)
 - [ ] Should one iPad hold several decks and switch between them, or one deck at a time?
 - [ ] Pharma use: any ABPI or data-retention constraints on logging, even anonymous taps?

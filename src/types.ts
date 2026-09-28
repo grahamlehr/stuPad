@@ -132,6 +132,28 @@ export interface PictureElement extends ElementBase {
   line?: Line;
 }
 
+/**
+ * A `<p:pic>` whose `nvPr` carries `<a:videoFile>` and an embedded `p14:media` (SPEC
+ * "Supported content": video now supported on destination slides). `mediaKey` is the
+ * embedded video file (mp4/m4v/mov) in `Deck.media`; `posterKey` is the same pic's own
+ * `blipFill` image (the poster frame PowerPoint snapshots when the video is inserted),
+ * also in `Deck.media`. A linked (non-embedded) video, or an unsupported video format,
+ * stays a `PictureElement` instead (poster only) with an `unsupported_element` warning,
+ * see `src/pptx/shapes.ts`. `loop`/`autoplay` come from the slide's `p:timing` XML when
+ * present, else `autoplay` defaults to true (SPEC "Kiosk mode behaviour").
+ */
+export interface VideoElement extends ElementBase {
+  kind: 'video';
+  /** embedded video file, key into Deck.media */
+  mediaKey: string;
+  /** poster frame image, key into Deck.media (same as a picture's own blipFill) */
+  posterKey: string;
+  /** PowerPoint's "Loop until stopped"; the kiosk restarts the video itself rather than using the native `loop` attribute (see src/kiosk/video.ts) */
+  loop: boolean;
+  /** plays on arrival at the slide, muted, once the transition settles; false means a tap starts it */
+  autoplay: boolean;
+}
+
 export interface GroupElement extends ElementBase {
   kind: 'group';
   /** children already transformed into slide px coordinates (group child offsets applied) */
@@ -155,7 +177,7 @@ export interface TableElement extends ElementBase {
   rows: TableCell[][];
 }
 
-export type SlideElement = ShapeElement | PictureElement | GroupElement | TableElement;
+export type SlideElement = ShapeElement | PictureElement | GroupElement | TableElement | VideoElement;
 
 export interface Slide {
   /** 1-based */
@@ -313,7 +335,8 @@ export interface Issue {
     | 'poll_single_option'
     | 'poll_duplicate_choice'
     | 'poll_bad_rating'
-    | 'poll_mixed_kind';
+    | 'poll_mixed_kind'
+    | 'large_video';
   message: string;
   slide?: number;
 }
@@ -457,7 +480,8 @@ export type EventType =
   | 'heartbeat'
   | 'attract_start'
   | 'attract_end'
-  | 'vote';
+  | 'vote'
+  | 'video_end';
 
 export type ReturnMethod = 'home_button' | 'tap' | 'timeout';
 
@@ -483,11 +507,21 @@ export interface LogEvent {
   poll?: string;
   /** choice name, `vote` events only */
   choice?: string;
+  /**
+   * Actual playing time in ms for a `video_end` event: wall time accumulated between each
+   * `playing` event and the next `pause`/`ended`/give-up (see `src/kiosk/video.ts`), not the
+   * video's own duration or dwell on the slide.
+   */
+  watched_ms?: number;
+  /** `video_end` only: true if the video reached its end (native `ended`) at least once,
+   * for a looping video, once its first full play completed. */
+  completed?: boolean;
 }
 
 export const CSV_COLUMNS = [
   'id', 'ts', 'session_id', 'visit_id', 'event', 'button_id', 'button_label',
   'slide_from', 'slide_to', 'method', 'dwell_ms', 'x', 'y', 'poll', 'choice',
+  'watched_ms', 'completed',
 ] as const;
 
 export interface EventFilter {

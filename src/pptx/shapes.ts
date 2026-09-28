@@ -1,15 +1,15 @@
 import type {
-  SlideElement, ShapeElement, PictureElement, GroupElement, TableElement, TableCell,
+  SlideElement, ShapeElement, PictureElement, GroupElement, TableElement, TableCell, VideoElement,
   Fill, Line, SlideLink, Issue, MediaItem, Rect,
 } from '../types';
-import { children, child, attr, attrNum, localTag } from './xml';
+import { children, child, findAll, attr, attrNum, localTag } from './xml';
 import { resolveColor, firstColorChild, type ColorCtx } from './color';
 import { parseTextBody, type TextResolveCtx } from './text';
 import {
   emuToPx, parseXfrm, groupChildSpace, applyGroupTransform, type Scale,
 } from './geometry';
 import type { Rel } from './zip';
-import { Pkg, mimeForPath } from './zip';
+import { Pkg, mimeForPath, isSupportedVideoPath } from './zip';
 
 export interface ShapeParseCtx extends TextResolveCtx {
   scale: Scale;
@@ -19,6 +19,12 @@ export interface ShapeParseCtx extends TextResolveCtx {
   pkg: Pkg;
   issues: Issue[];
   slideIndex: number;
+  /**
+   * The slide's own XML document, used only to look up `<p:timing>` for a video shape's
+   * loop/autoplay (see `readVideoTiming` below). Layout/master pass-through shapes reuse
+   * the slide's ctx too, but a video is never expected there, so this is harmless for them.
+   */
+  slideDoc: Document;
 }
 
 const SLIDE_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide';
@@ -158,6 +164,151 @@ async function ensureMedia(mediaKey: string, ctx: ShapeParseCtx) {
   if (blob) ctx.media[mediaKey] = { blob, mime: mimeForPath(mediaKey) };
 }
 
+// -------------------------------------------------------------------- video
+
+/**
+ * Resolves a `<p:pic>`'s video signature (ROADMAP "Video on destination slides"): PowerPoint
+ * marks a video picture with `<a:videoFile r:link="...">` under `nvPicPr/nvPr`, plus (for an
+ * embedded video) a `<p14:media r:embed="...">` extension pointing at the same or a
+ * duplicate relationship. Returns `undefined` when the shape isn't a video at all. When it
+ * is a video but can't be played (a linked/external file with no embedded copy, or an
+ * unsupported format), returns `{ unsupported: true }` and pushes the matching warning:
+ * the caller keeps the shape as a plain picture (poster only) in that case.
+ */
+function resolveVideoMedia(nvPr: Element | null, ctx: ShapeParseCtx): { mediaKey: string } | { unsupported: true } | undefined {
+  const videoFile = child(nvPr, 'videoFile');
+  if (!videoFile) return undefined; // not a video shape at all
+
+  // Prefer the p14:media r:embed relationship (embedded media), wherever it sits under
+  // nvPr's extLst. PowerPoint always uses uri "{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}" for
+  // it, but the uri isn't checked here so a slight variation across PowerPoint versions
+  // doesn't break detection.
+  const extLst = child(nvPr, 'extLst');
+  let embedRid: string | null = null;
+  for (const ext of children(extLst, 'ext')) {
+    const media = child(ext, 'media');
+    if (media) {
+      embedRid = attr(media, 'embed');
+      if (embedRid) break;
+    }
+  }
+
+  const linkRid = attr(videoFile, 'link');
+  const embedRel = embedRid ? ctx.rels.find((r) => r.id === embedRid) : undefined;
+  const linkRel = linkRid ? ctx.rels.find((r) => r.id === linkRid) : undefined;
+
+  // The embedded relationship, if resolvable and not itself marked External, wins.
+  const rel = embedRel && embedRel.targetMode !== 'External' ? embedRel : undefined;
+  if (rel) {
+    if (!isSupportedVideoPath(rel.target)) {
+      ctx.issues.push({
+        severity: 'warning',
+        code: 'unsupported_element',
+        message: `Slide ${ctx.slideIndex}: video format not supported (only mp4, m4v and mov play); showing the poster frame instead`,
+        slide: ctx.slideIndex,
+      });
+      return { unsupported: true };
+    }
+    return { mediaKey: rel.target };
+  }
+
+  // No usable embedded relationship: a linked (non-embedded) file, per SPEC "Supported
+  // content" (video must be embedded in the .pptx, per the offline-only rule).
+  if (linkRel?.targetMode === 'External') {
+    ctx.issues.push({
+      severity: 'warning',
+      code: 'unsupported_element',
+      message: `Slide ${ctx.slideIndex}: linked video not embedded in the file; showing the poster frame instead`,
+      slide: ctx.slideIndex,
+    });
+    return { unsupported: true };
+  }
+
+  // Rare fallback: a:videoFile r:link resolves to an internal (non-External) target with no
+  // p14:media extension at all (older authoring tools). Treat it as embedded too.
+  if (linkRel && linkRel.targetMode !== 'External') {
+    if (!isSupportedVideoPath(linkRel.target)) {
+      ctx.issues.push({
+        severity: 'warning',
+        code: 'unsupported_element',
+        message: `Slide ${ctx.slideIndex}: video format not supported (only mp4, m4v and mov play); showing the poster frame instead`,
+        slide: ctx.slideIndex,
+      });
+      return { unsupported: true };
+    }
+    return { mediaKey: linkRel.target };
+  }
+
+  ctx.issues.push({
+    severity: 'warning',
+    code: 'unsupported_element',
+    message: `Slide ${ctx.slideIndex}: video could not be resolved; showing the poster frame instead`,
+    slide: ctx.slideIndex,
+  });
+  return { unsupported: true };
+}
+
+/** Nearest ancestor (walking `.parentElement`) whose local name matches, or null. */
+function closest(el: Element | null, name: string): Element | null {
+  let cur = el?.parentElement ?? null;
+  while (cur) {
+    if (localTag(cur) === name) return cur;
+    cur = cur.parentElement;
+  }
+  return null;
+}
+
+/**
+ * Reads loop/autoplay for `shapeId` from the slide's `<p:timing>` tree (ROADMAP "Video on
+ * destination slides"). Deliberately tolerant: PowerPoint's timing XML varies across authoring
+ * tools and this never throws, falling back to `autoplay: true` only when `<p:timing>` is
+ * absent entirely (SPEC: "else autoplay on arrival"). When `<p:timing>` is present but says
+ * nothing about this shape, `autoplay` defaults to false (a tap starts it), the same as an
+ * explicit click-triggered play command.
+ *
+ * For each `<p:spTgt spid="shapeId">` found anywhere in the tree: its `tgtEl` and `cBhvr`
+ * ancestors are OOXML's fixed wrapping (`<p:cBhvr><p:cTn .../><p:tgtEl><p:spTgt/></p:tgtEl></p:cBhvr>`),
+ * so `repeatCount="indefinite"` on the `cBhvr`'s own `<p:cTn>` sibling means "loop until
+ * stopped". A play command is `<p:cmd type="call" cmd="playFrom(...)">` wrapping that same
+ * `cBhvr`; whether it counts as autoplay depends on the nearest ancestor `<p:cTn>` that
+ * carries a `nodeType`: `clickEffect` means a tap starts it (autoplay false), `withEffect`/
+ * `afterEffect` means it plays on arrival (autoplay true).
+ */
+function readVideoTiming(slideDoc: Document, shapeId: string): { loop: boolean; autoplay: boolean } {
+  try {
+    const timing = child(slideDoc, 'timing');
+    if (!timing) return { loop: false, autoplay: true };
+
+    let loop = false;
+    let autoplay = false;
+    for (const spTgt of findAll(timing, 'spTgt')) {
+      if (attr(spTgt, 'spid') !== shapeId) continue;
+      const tgtEl = spTgt.parentElement; // <p:tgtEl>
+      const cBhvr = tgtEl?.parentElement ?? null; // <p:cBhvr>
+      if (!cBhvr || localTag(cBhvr) !== 'cBhvr') continue;
+
+      const behaviorCtn = child(cBhvr, 'cTn');
+      if (attr(behaviorCtn, 'repeatCount') === 'indefinite') loop = true;
+
+      const cmd = cBhvr.parentElement; // <p:cmd>, if this behaviour is a play command
+      const isPlayCmd = cmd && localTag(cmd) === 'cmd' && attr(cmd, 'type') === 'call' && (attr(cmd, 'cmd') ?? '').startsWith('playFrom');
+      if (!isPlayCmd) continue;
+
+      const effectCtn = closest(cmd, 'cTn');
+      // Walk up until a cTn actually carries a nodeType (par wrappers without one don't count).
+      let node = effectCtn;
+      while (node && !attr(node, 'nodeType')) node = closest(node, 'cTn');
+      const nodeType = attr(node, 'nodeType');
+      if (nodeType === 'withEffect' || nodeType === 'afterEffect') autoplay = true;
+      // nodeType === 'clickEffect' (or nothing found): leave autoplay as-is (false unless
+      // another spTgt match for the same shape already set it true).
+    }
+    return { loop, autoplay };
+  } catch {
+    return { loop: false, autoplay: true };
+  }
+}
+
 async function parseSp(el: Element, ctx: ShapeParseCtx): Promise<ShapeElement> {
   const cNvPr = child(child(el, 'nvSpPr'), 'cNvPr');
   const spPr = child(el, 'spPr');
@@ -197,8 +348,9 @@ async function parseSp(el: Element, ctx: ShapeParseCtx): Promise<ShapeElement> {
   };
 }
 
-async function parsePic(el: Element, ctx: ShapeParseCtx): Promise<PictureElement> {
+async function parsePic(el: Element, ctx: ShapeParseCtx): Promise<PictureElement | VideoElement> {
   const cNvPr = child(child(el, 'nvPicPr'), 'cNvPr');
+  const nvPr = child(child(el, 'nvPicPr'), 'nvPr');
   const spPr = child(el, 'spPr');
   const xfrm = parseXfrm(spPr, ctx.scale) ?? { x: 0, y: 0, w: 0, h: 0, rot: 0, flipH: false, flipV: false };
   const blipFill = child(el, 'blipFill');
@@ -223,13 +375,39 @@ async function parsePic(el: Element, ctx: ShapeParseCtx): Promise<PictureElement
     : undefined;
   const line = parseLine(spPr, ctx, ctx.scale);
 
+  const id = attr(cNvPr, 'id') ?? '';
+  const name = attr(cNvPr, 'name') ?? '';
+  const link = resolveLink(cNvPr, ctx);
+  const hidden = attr(cNvPr, 'hidden') === '1';
+
+  const video = resolveVideoMedia(nvPr, ctx);
+  if (video && !('unsupported' in video)) {
+    await ensureMedia(video.mediaKey, ctx);
+    const { loop, autoplay } = readVideoTiming(ctx.slideDoc, id);
+    return {
+      kind: 'video',
+      id,
+      name,
+      xfrm,
+      link,
+      hidden,
+      mediaKey: video.mediaKey,
+      // Poster = this pic's own blipFill image, per ROADMAP; PowerPoint always sets one when
+      // a video is inserted, but an empty mediaKey (image unresolved) degrades gracefully:
+      // the renderer's <video poster> just has nothing to show, same as a missing image would.
+      posterKey: mediaKey,
+      loop,
+      autoplay,
+    };
+  }
+
   return {
     kind: 'picture',
-    id: attr(cNvPr, 'id') ?? '',
-    name: attr(cNvPr, 'name') ?? '',
+    id,
+    name,
     xfrm,
-    link: resolveLink(cNvPr, ctx),
-    hidden: attr(cNvPr, 'hidden') === '1',
+    link,
+    hidden,
     mediaKey,
     crop,
     line,

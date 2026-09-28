@@ -1,4 +1,4 @@
-import type { Deck, Issue } from '../types';
+import type { Deck, Issue, SlideElement } from '../types';
 import { SLIDE_W } from '../types';
 import { isKnownFont } from './fonts';
 import { ptToPx } from './geometry';
@@ -7,6 +7,30 @@ const SIXTEEN_NINE = 16 / 9;
 const ASPECT_TOLERANCE = 0.01;
 const MAX_BYTES = 100 * 1024 * 1024;
 const MIN_BUTTON_PT = 44;
+/** Above this total embedded-video size, the Check step warns about iPad storage headroom
+ * (ROADMAP "Video on destination slides"). Videos also count toward MAX_BYTES already. */
+export const LARGE_VIDEO_BYTES = 50 * 1024 * 1024;
+
+function collectVideoMediaKeys(elements: SlideElement[], out: Set<string>): void {
+  for (const el of elements) {
+    if (el.kind === 'video') out.add(el.mediaKey);
+    else if (el.kind === 'group') collectVideoMediaKeys(el.children, out);
+  }
+}
+
+/** Total bytes of every embedded video in the deck (deduplicated by mediaKey, so a video
+ * reused on several slides is only counted once). Used by the `large_video` warning and by
+ * Setup's Check step (`fmtBytes`), see SPEC "Admin setup flow". */
+export function totalVideoBytes(deck: Deck): number {
+  const keys = new Set<string>();
+  for (const slide of deck.slides) collectVideoMediaKeys(slide.elements, keys);
+  let total = 0;
+  for (const key of keys) {
+    const item = deck.media[key];
+    if (item) total += item.blob.size;
+  }
+  return total;
+}
 
 /**
  * Slides reachable from slide 1 via a home-slide button, then any chain of nav links
@@ -100,6 +124,15 @@ export function validateDeck(deck: Deck): Issue[] {
   }
 
   issues.push(...validatePollOptions(deck));
+
+  const videoBytes = totalVideoBytes(deck);
+  if (videoBytes > LARGE_VIDEO_BYTES) {
+    issues.push({
+      severity: 'warning',
+      code: 'large_video',
+      message: `Video totals ${(videoBytes / 1024 / 1024).toFixed(1)} MB; check the iPad has enough free storage`,
+    });
+  }
 
   return issues;
 }

@@ -5,7 +5,7 @@ import { detectBackLinks, detectButtons, detectHomeLinks, detectNavLinks, detect
 import { validateDeckAndSize } from './validate';
 
 export { KNOWN_FONTS } from './fonts';
-export { validateDeck } from './validate';
+export { validateDeck, totalVideoBytes, LARGE_VIDEO_BYTES } from './validate';
 
 /**
  * Parse a .pptx file into the shared Deck model (src/types.ts).

@@ -143,7 +143,7 @@ Every PR: `npm run typecheck`, `npm test`, `npm run build`, then a device check 
 - Tests: name parsing (underscores in choice names), vote once per visit, link-then-navigate, CSV columns.
 - Stats (decision 4): a home-slide vote with no link is not a visit, because it has no destination, dwell or return. `computeStats` adds `homeVotes` and `interactions` (visits plus home-slide votes without a link). Summary shows an "Interactions" tile as the headline engagement count, and Poll results counts every vote. Visits, average dwell, Return behaviour and Button share count real visits only, so their totals stay consistent. A vote shape with a link starts a normal visit and counts once, as that visit.
 
-## H. Video on destination slides (item 8)
+## H. Video on destination slides (item 8) (done in 1.8.0)
 
 **Goal.** Play videos that are embedded in the deck (the most common v2 ask).
 
@@ -173,4 +173,4 @@ Agreed Sep 27, 2026:
 
 Waiting on:
 
-5. **Embedded fonts:** Graham is finding a deck with an embedded font for the E0 spike. E1 can start once one sample is in hand; more samples (PowerPoint for Windows, Mac and web) would settle whether E2 is needed.
+5. **Embedded fonts (on hold):** E0 ran on Sep 27, 2026 against one sample saved by PowerPoint for Mac 16 (full fonts, not subsetted). All four faces are EOT version 0x00020002 with flags 0x4: MicroType Express compressed, not XOR-obfuscated, fsType 0x8 (editable). E1 alone would decode none of them, so E needs E2 (the MTX decoder) from day one. The sample uses a proprietary corporate font, so it can't be a test fixture; E2 tests need an OFL font saved compressed by PowerPoint. Samples from PowerPoint for Windows and the web would show whether they compress too. E is on hold until Graham picks it up again.

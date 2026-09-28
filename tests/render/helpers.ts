@@ -5,6 +5,7 @@ import type {
   PictureElement,
   GroupElement,
   TableElement,
+  VideoElement,
   Xfrm,
   TextBody,
   Fill,
@@ -44,6 +45,20 @@ export function picture(overrides: Partial<PictureElement> = {}): PictureElement
     name: overrides.name ?? 'Picture 1',
     xfrm: overrides.xfrm ?? xfrm(0, 0, 100, 100),
     mediaKey: overrides.mediaKey ?? 'ppt/media/image1.png',
+    ...overrides,
+  };
+}
+
+export function video(overrides: Partial<VideoElement> = {}): VideoElement {
+  return {
+    kind: 'video',
+    id: overrides.id ?? 'v1',
+    name: overrides.name ?? 'Video 1',
+    xfrm: overrides.xfrm ?? xfrm(0, 0, 100, 100),
+    mediaKey: overrides.mediaKey ?? 'ppt/media/media1.mp4',
+    posterKey: overrides.posterKey ?? 'ppt/media/image1.png',
+    loop: overrides.loop ?? false,
+    autoplay: overrides.autoplay ?? true,
     ...overrides,
   };
 }
@@ -107,4 +122,8 @@ export function deck(overrides: Partial<Deck> = {}): Deck {
 
 export function pngBlob(): Blob {
   return new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' });
+}
+
+export function mp4Blob(): Blob {
+  return new Blob([new Uint8Array([0, 0, 0, 24])], { type: 'video/mp4' });
 }

@@ -1,7 +1,7 @@
 // Type-only import: jsPDF (~400 kB) is loaded on demand in buildPdf so kiosk startup never parses it.
 import type { jsPDF } from 'jspdf';
 import type { Deck, KioskConfig, LogEvent } from '../types';
-import { computeStats, type ReportStats, type PollOptionMeta } from './stats';
+import { computeStats, type ReportStats, type PollOptionMeta, type VideoStat } from './stats';
 import { buttonColor, returnMethodColor } from './colors';
 import {
   drawDonutChart,
@@ -166,6 +166,44 @@ function drawStatTiles(
 
   const rows = Math.ceil(tiles.length / cols);
   return y + rows * (tileH + rowGap);
+}
+
+/**
+ * "Video" section on the Slides page (ROADMAP "Video on destination slides": plays, median
+ * watched time, % watched to the end, per slide). Plain `doc.text` rows: unlike
+ * `drawPathTable`, nothing here needs a glyph outside WinAnsi, so no canvas detour is needed.
+ * Returns the height used, in mm, so a caller stacking it under another element knows how
+ * much room it took.
+ */
+function drawVideoTable(doc: jsPDF, x: number, y: number, width: number, videos: VideoStat[]): number {
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(60, 60, 60);
+  doc.text('Video', x, y);
+
+  const headerY = y + 8;
+  const rowH = 7;
+  const colW = width / 4;
+  const headers = ['Slide', 'Plays', 'Median watched', 'Watched to end'];
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(120, 120, 120);
+  headers.forEach((label, i) => doc.text(label, x + colW * i, headerY));
+
+  doc.setDrawColor(224, 224, 224);
+  doc.line(x, headerY + 2, x + width, headerY + 2);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(40, 40, 40);
+  videos.forEach((v, i) => {
+    const rowY = headerY + 2 + rowH * (i + 1);
+    const values = [`Slide ${v.slide}`, String(v.plays), fmtDuration(v.medianWatchedMs), `${Math.round(v.completedPct)}%`];
+    values.forEach((val, j) => doc.text(val, x + colW * j, rowY));
+  });
+
+  return headerY + 2 + rowH * videos.length - y;
 }
 
 /** Draws the home-slide thumbnail box; best-effort, silently omitted if `png` is missing or fails to load. */
@@ -450,44 +488,56 @@ export async function buildPdf(
     const timeoutUrl = renderChartImage(drawPercentBarChart, timeoutData, 640, 440, fontScaleFor(640, timeoutW, 13));
     placeImage(doc, timeoutUrl, 640, 440, timeoutX, MARGIN + 14, timeoutW);
 
-    // ---------------------------------------------------------------- page: Slides and paths (only with onward nav taps)
-    if (stats.totalNavTaps > 0) {
+    // ---------------------------------------------------------------- page: Slides and paths
+    // (onward nav taps), Video (video_end events), or both: see ROADMAP "Video on
+    // destination slides": the page used to render only for nav taps; a deck with videos but
+    // no onward navigation now gets a video-only version of it, titled "Video" instead.
+    if (stats.totalNavTaps > 0 || stats.videos.length > 0) {
       doc.addPage();
-      drawPageTitle(doc, 'Slides and paths');
+      const hasPaths = stats.totalNavTaps > 0;
+      drawPageTitle(doc, hasPaths ? 'Slides and paths' : 'Video');
 
-      const leftW = CONTENT_W * 0.52;
-      const rightX = MARGIN + leftW + 10;
-      const rightW = CONTENT_W - leftW - 10;
+      if (hasPaths) {
+        const leftW = CONTENT_W * 0.52;
+        const rightX = MARGIN + leftW + 10;
+        const rightW = CONTENT_W - leftW - 10;
 
-      const slideTimeData: SlideTimeChartData = {
-        entries: stats.slideTime.map((s) => ({
-          slide: s.slide,
-          visits: s.visits,
-          medianMs: s.medianMs,
-          medianMsExclTimeout: s.medianMsExclTimeout,
-        })),
-      };
-      const slideTimeUrl = renderChartImage(drawSlideTimeChart, slideTimeData, 800, 520, fontScaleFor(800, leftW, 13));
-      placeImage(doc, slideTimeUrl, 800, 520, MARGIN, MARGIN + 14, leftW);
+        const slideTimeData: SlideTimeChartData = {
+          entries: stats.slideTime.map((s) => ({
+            slide: s.slide,
+            visits: s.visits,
+            medianMs: s.medianMs,
+            medianMsExclTimeout: s.medianMsExclTimeout,
+          })),
+        };
+        const slideTimeUrl = renderChartImage(drawSlideTimeChart, slideTimeData, 800, 520, fontScaleFor(800, leftW, 13));
+        placeImage(doc, slideTimeUrl, 800, 520, MARGIN, MARGIN + 14, leftW);
 
-      const pathEntries: PathTableEntry[] = stats.topPaths.map((p) => ({
-        path: p.path,
-        count: p.count,
-        pct: stats.totalPaths > 0 ? (p.count / stats.totalPaths) * 100 : 0,
-        ended: p.ended,
-      }));
-      if (stats.otherPaths > 0) {
-        pathEntries.push({
-          path: [],
-          label: 'Other',
-          count: stats.otherPaths,
-          pct: stats.totalPaths > 0 ? (stats.otherPaths / stats.totalPaths) * 100 : 0,
-          ended: false,
-        });
+        const pathEntries: PathTableEntry[] = stats.topPaths.map((p) => ({
+          path: p.path,
+          count: p.count,
+          pct: stats.totalPaths > 0 ? (p.count / stats.totalPaths) * 100 : 0,
+          ended: p.ended,
+        }));
+        if (stats.otherPaths > 0) {
+          pathEntries.push({
+            path: [],
+            label: 'Other',
+            count: stats.otherPaths,
+            pct: stats.totalPaths > 0 ? (stats.otherPaths / stats.totalPaths) * 100 : 0,
+            ended: false,
+          });
+        }
+        const pathTableData: PathTableData = { entries: pathEntries };
+        const pathUrl = renderChartImage(drawPathTable, pathTableData, 720, 520, fontScaleFor(720, rightW, 12));
+        const pathH = placeImage(doc, pathUrl, 720, 520, rightX, MARGIN + 14, rightW);
+
+        if (stats.videos.length > 0) {
+          drawVideoTable(doc, rightX, MARGIN + 14 + pathH + 10, rightW, stats.videos);
+        }
+      } else {
+        drawVideoTable(doc, MARGIN, MARGIN + 16, CONTENT_W, stats.videos);
       }
-      const pathTableData: PathTableData = { entries: pathEntries };
-      const pathUrl = renderChartImage(drawPathTable, pathTableData, 720, 520, fontScaleFor(720, rightW, 12));
-      placeImage(doc, pathUrl, 720, 520, rightX, MARGIN + 14, rightW);
     }
 
     // ---------------------------------------------------------------- pages: Poll results (one per poll with votes)

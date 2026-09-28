@@ -5,6 +5,9 @@ export interface Rel {
   id: string;
   type: string;
   target: string;
+  /** "External" for a relationship whose Target is outside the package (e.g. a linked,
+   * non-embedded video file); undefined for a normal internal (embedded) relationship. */
+  targetMode?: string;
 }
 
 /** Resolve a rels-file target (which is relative to the *part's* directory) to a zip path. */
@@ -66,11 +69,19 @@ export class Pkg {
   async relsFor(partPath: string): Promise<Rel[]> {
     const doc = await this.xml(relsPathFor(partPath));
     if (!doc) return [];
-    return children(doc, 'Relationship').map((el) => ({
-      id: attr(el, 'Id') ?? '',
-      type: attr(el, 'Type') ?? '',
-      target: resolvePath(partPath, attr(el, 'Target') ?? ''),
-    }));
+    return children(doc, 'Relationship').map((el) => {
+      const targetMode = attr(el, 'TargetMode') ?? undefined;
+      const rawTarget = attr(el, 'Target') ?? '';
+      return {
+        id: attr(el, 'Id') ?? '',
+        type: attr(el, 'Type') ?? '',
+        // An External target (e.g. a linked, non-embedded video file) is not a path inside
+        // this zip: resolving it against the part's directory would just mangle it, and
+        // nothing ever calls pkg.blob()/pkg.xml() on it, so it's kept as-is.
+        target: targetMode === 'External' ? rawTarget : resolvePath(partPath, rawTarget),
+        targetMode,
+      };
+    });
   }
 }
 
@@ -87,9 +98,20 @@ const MIME_BY_EXT: Record<string, string> = {
   webp: 'image/webp',
   emf: 'image/x-emf',
   wmf: 'image/x-wmf',
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  mov: 'video/quicktime',
 };
 
 export function mimeForPath(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
   return MIME_BY_EXT[ext] ?? 'application/octet-stream';
+}
+
+/** Video formats the kiosk can play (SPEC "Supported content"): mp4, m4v and mov, by file
+ * extension. Anything else (wmv, avi, webm, ...) is unsupported: the parser keeps the shape
+ * as a plain picture (poster only) and raises an `unsupported_element` warning. */
+export function isSupportedVideoPath(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  return ext === 'mp4' || ext === 'm4v' || ext === 'mov';
 }

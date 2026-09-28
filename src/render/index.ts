@@ -18,6 +18,7 @@ import type {
   GroupElement,
   TableElement,
   TableCell,
+  VideoElement,
   Fill,
   Line,
   TextBody,
@@ -390,6 +391,40 @@ function buildPicture(el: PictureElement, deck: Deck, urls: Map<string, string>)
   return wrap;
 }
 
+/**
+ * A destination-slide video (ROADMAP "Video on destination slides"): built once per slide,
+ * muted/playsinline/preload="metadata", poster = the poster image's object URL (created and
+ * revoked with every other picture URL, via `urls`/`getObjectUrl`), and **no `src`**: the
+ * kiosk controller (`src/kiosk/video.ts`) sets/clears `src` only while this slide is the
+ * active destination, so a video's data is never held in memory otherwise. Carries
+ * `data-video-id` so `SlideStage.videosOn()` can zip the built elements back to their
+ * `VideoElement` defs in document order (see the constructor). The Setup preview and image
+ * mode never call into `src/kiosk/video.ts`, so this element only ever shows its poster there.
+ */
+function buildVideo(el: VideoElement, deck: Deck, urls: Map<string, string>): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'sr-el sr-crop-wrap';
+  applyBaseBox(wrap, el.xfrm);
+  applyRotateFlip(wrap, el.xfrm);
+
+  const video = document.createElement('video');
+  video.className = 'sr-full-img sr-video';
+  video.dataset.videoId = el.id;
+  video.muted = true;
+  video.defaultMuted = true;
+  video.setAttribute('muted', ''); // reflected attribute: iOS Safari checks this for autoplay eligibility, not just the property
+  video.playsInline = true;
+  video.setAttribute('playsinline', '');
+  video.preload = 'metadata';
+  video.setAttribute('disablepictureinpicture', '');
+  video.controls = false;
+  video.poster = getObjectUrl(deck, el.posterKey, urls);
+  video.draggable = false;
+
+  wrap.appendChild(video);
+  return wrap;
+}
+
 function buildGroup(el: GroupElement, deck: Deck, urls: Map<string, string>): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'sr-group';
@@ -469,9 +504,25 @@ function buildElement(el: SlideElement, deck: Deck, urls: Map<string, string>): 
       return buildGroup(el, deck, urls);
     case 'table':
       return buildTable(el, deck, urls);
+    case 'video':
+      return buildVideo(el, deck, urls);
     default:
       return null;
   }
+}
+
+/** Every `VideoElement` on a slide, in document order (recursing into groups): the same
+ * order `buildElement`/`buildGroup` visit them in, so zipping this against a
+ * `querySelectorAll('video.sr-video')` result pairs each def with the element built for it.
+ * See `SlideStage.videosOn`. */
+function collectVideoDefs(elements: SlideElement[]): VideoElement[] {
+  const out: VideoElement[] = [];
+  for (const el of elements) {
+    if (el.hidden) continue;
+    if (el.kind === 'video') out.push(el);
+    else if (el.kind === 'group') out.push(...collectVideoDefs(el.children));
+  }
+  return out;
 }
 
 function buildSlideEl(deck: Deck, slide: Slide, urls: Map<string, string>, useRaster: boolean): HTMLElement {
@@ -504,6 +555,14 @@ export interface StageOpts {
   useRaster?: boolean;
 }
 
+/** One built `<video>` element and the `VideoElement` it was built from, as returned by
+ * `SlideStage.videosOn()`. `src/kiosk/video.ts` owns everything about actually playing it
+ * (setting/clearing `src`, listeners, the watchdog); the stage only builds and exposes it. */
+export interface StageVideo {
+  el: HTMLVideoElement;
+  def: VideoElement;
+}
+
 export interface SlideTransition {
   type: 'none' | 'fade';
   ms: number;
@@ -527,6 +586,10 @@ export class SlideStage {
   private readonly scaler: HTMLElement;
   private readonly slideHost: HTMLElement;
   private readonly slideEls: HTMLElement[];
+  /** Parallel to `slideEls`: every video on that slide, built element zipped with its def
+   * (see `collectVideoDefs` and `videosOn`). Empty for a slide with no videos, or one shown
+   * as a raster image (no live DOM built for it at all). */
+  private readonly videosBySlide: StageVideo[][];
   private readonly urls = new Map<string, string>();
   private readonly ro: ResizeObserver | undefined;
 
@@ -576,6 +639,16 @@ export class SlideStage {
       this.slideHost.appendChild(el);
     });
 
+    // Zip each slide's VideoElement defs (document order) against the <video> elements
+    // actually built for it (same order; empty when the slide rendered as a raster image
+    // instead, since then no live DOM, and no <video>, was built for it at all).
+    this.videosBySlide = deck.slides.map((slide, i) => {
+      const defs = collectVideoDefs(slide.elements);
+      if (defs.length === 0) return [];
+      const els = Array.from(this.slideEls[i].querySelectorAll<HTMLVideoElement>('video.sr-video'));
+      return defs.map((def, idx) => ({ el: els[idx], def })).filter((v): v is StageVideo => !!v.el);
+    });
+
     if (typeof ResizeObserver !== 'undefined') {
       this.ro = new ResizeObserver(() => this.fit());
       this.ro.observe(this.container);
@@ -587,6 +660,13 @@ export class SlideStage {
 
   get current(): number {
     return this._current;
+  }
+
+  /** Every video built for slide `index` (1-based), in document order. `src/kiosk/video.ts`
+   * uses this to find the first autoplay video on arrival and to hit-test taps against
+   * videos on the current slide; it never queries the DOM itself. */
+  videosOn(index: number): StageVideo[] {
+    return this.videosBySlide[index - 1] ?? [];
   }
 
   private hideLayer(el: HTMLElement): void {
@@ -703,6 +783,18 @@ export class SlideStage {
     this.scaler.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
   }
 
+  /**
+   * Revokes every object URL this stage created, including each video's poster (created by
+   * `buildVideo`/`getObjectUrl`, tracked in `this.urls` exactly like a picture's). A video's
+   * *playback* `src` is a separate object URL that `src/kiosk/video.ts`'s `VideoPlayer` alone
+   * creates and revokes, only while a slide is the active destination; `KioskController.stop()`
+   * always calls `VideoPlayer.destroy()` before this method, so in the normal kiosk flow no
+   * playback `src` is ever still set by the time a stage is destroyed. As defense in depth
+   * (CLAUDE.md: object URLs must never leak on a 12-hour run) this method also revokes any
+   * `src` still left on one of its own video elements, so a stage is always safe to destroy on
+   * its own. A stage with no attached `VideoPlayer` (Setup preview, thumbnails, the
+   * rasterizer) never sets a playback `src` at all, so this is a no-op for it.
+   */
   destroy(): void {
     const f = this.fade;
     this.fade = undefined;
@@ -713,6 +805,14 @@ export class SlideStage {
     this.ro?.disconnect();
     for (const url of this.urls.values()) URL.revokeObjectURL(url);
     this.urls.clear();
+    for (const videos of this.videosBySlide) {
+      for (const { el } of videos) {
+        if (el.src) {
+          URL.revokeObjectURL(el.src);
+          el.removeAttribute('src');
+        }
+      }
+    }
     this.scaler.remove();
   }
 }
@@ -899,6 +999,11 @@ function collectSlideMediaKeys(slide: Slide): Set<string> {
         break;
       case 'table':
         for (const row of el.rows) for (const cell of row) addFill(cell.fill);
+        break;
+      case 'video':
+        // Only the poster needs to be resolvable for a static snapshot (rasterizeSlide/
+        // rasterizeDeck never play video); the video's own mediaKey is irrelevant there.
+        keys.add(el.posterKey);
         break;
     }
   };

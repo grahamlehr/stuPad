@@ -8,6 +8,7 @@ export type {
   PollOptionMeta,
   PollStat,
   PollChoiceStat,
+  VideoStat,
 } from './stats';
 export { toCsv, csvFileName, pdfFileName } from './csv';
 export { buttonColor } from './colors';

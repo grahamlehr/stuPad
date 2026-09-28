@@ -5,7 +5,7 @@ import { SetupScreen } from '../../src/ui/setup';
 import * as render from '../../src/render';
 import * as store from '../../src/store';
 import { stubObjectUrl } from '../render/setup-url';
-import { deck, slide } from '../render/helpers';
+import { deck, slide, video } from '../render/helpers';
 import { defaultConfig } from '../../src/types';
 
 const FIXTURES = path.resolve(__dirname, '../fixtures');
@@ -46,6 +46,43 @@ describe('SetupScreen: re-validation of a stored deck', () => {
     const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
     const warningItems = container.querySelectorAll('.issue-group--warning li');
     expect(warningItems.length).toBeGreaterThan(0);
+    screen.destroy();
+  });
+});
+
+describe('SetupScreen: Check step video size (feature H)', () => {
+  it('shows the total video size when the deck has an embedded video', () => {
+    const bytes = 2 * 1024 * 1024;
+    const d = deck({
+      slides: [
+        slide({
+          index: 1,
+          elements: [video({ id: 'v1', mediaKey: 'ppt/media/media1.mp4', posterKey: 'ppt/media/image1.png' })],
+        }),
+        slide({ index: 2 }),
+      ],
+      buttons: [
+        { id: 'b1', shapeName: 'BTN_A', text: 'A', defaultLabel: 'A', targetSlide: 2, bounds: { x: 0, y: 0, w: 200, h: 200 } },
+        { id: 'b2', shapeName: 'BTN_B', text: 'B', defaultLabel: 'B', targetSlide: 2, bounds: { x: 0, y: 0, w: 200, h: 200 } },
+      ],
+      media: {
+        'ppt/media/media1.mp4': { blob: new Blob([new Uint8Array(bytes)], { type: 'video/mp4' }), mime: 'video/mp4' },
+        'ppt/media/image1.png': { blob: new Blob([new Uint8Array(10)], { type: 'image/png' }), mime: 'image/png' },
+      },
+    });
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: d, onGoLive: vi.fn(), onClearAll: vi.fn() });
+    const checkStep = container.querySelector('[data-step="check"]') as HTMLElement;
+    expect(checkStep.textContent).toContain('Total video size');
+    expect(checkStep.textContent).toContain('2.0 MB');
+    screen.destroy();
+  });
+
+  it('shows nothing about video size for a deck with no videos', () => {
+    const container = document.createElement('div');
+    const screen = new SetupScreen({ container, initialDeck: makeDeck(), onGoLive: vi.fn(), onClearAll: vi.fn() });
+    const checkStep = container.querySelector('[data-step="check"]') as HTMLElement;
+    expect(checkStep.textContent).not.toContain('Total video size');
     screen.destroy();
   });
 });

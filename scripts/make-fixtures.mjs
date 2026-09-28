@@ -20,6 +20,23 @@
  *                          VOTE_Topic_Net_Zero option linked to the thank-you slide (4);
  *                          slide 3 has a single-option VOTE_Single_OnlyOption (unlinked,
  *                          -> poll_single_option warning); slide 4 is the thank-you slide
+ *   video.pptx           - home (2 buttons: Video A -> slide 2, Video B -> slide 3), each
+ *                          destination with a Home link back:
+ *                            slide 2: an embedded mp4 (scripts/fixture-media/tiny.mp4) with no
+ *                              timing XML at all (pptxgenjs never emits <p:timing>), so the
+ *                              parser's "timing absent entirely -> autoplay true" default is
+ *                              exercised; loop false
+ *                            slide 3: the same embedded mp4, patched via JSZip with a
+ *                              hand-written <p:timing> tree targeting its shape id:
+ *                              repeatCount="indefinite" (loop true) on a play command that
+ *                              sits under a clickEffect par (autoplay false), so both timing
+ *                              branches are exercised against real-shaped XML
+ *                            slide 4: a "linked" (online, TargetMode="External") video via
+ *                              pptxgenjs's `type: 'online'` media, which emits no p14:media
+ *                              extension at all -> unsupported_element ("linked video not
+ *                              embedded") and stays a picture (poster only); deliberately left
+ *                              unlinked from Home (-> unlinked_slide warning, same pattern as
+ *                              good.pptx's info slide)
  *
  * Run: npm run fixtures
  */
@@ -666,6 +683,131 @@ function buildPollsDeck() {
   return pptx;
 }
 
+/**
+ * Deck for feature H (video on destination slides): see the header comment for the full
+ * layout. `tinyMp4Base64` is `scripts/fixture-media/tiny.mp4` (checked in, generated once
+ * with ffmpeg, see that directory's README) base64-encoded for pptxgenjs's `data:` media
+ * option, so `npm run fixtures` never needs ffmpeg itself.
+ */
+function buildVideoDeck(tinyMp4Base64) {
+  const pptx = new PptxGenJS();
+  pptx.defineLayout({ name: 'STUPAD_16x9', width: 13.333, height: 7.5 });
+  pptx.layout = 'STUPAD_16x9';
+
+  const home = pptx.addSlide();
+  home.background = { color: NAVY };
+  home.addText('Video fixture', {
+    x: 0.6, y: 0.4, w: 12, h: 0.8, fontFace: FONT, fontSize: 26, bold: true, color: WHITE,
+  });
+  home.addText('Video A', {
+    x: 1, y: 2.6, w: 2.7, h: 1.6,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.12,
+    fill: { color: ACCENT }, fontFace: FONT, fontSize: 18, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'BTN_VideoA',
+    hyperlink: { slide: 2 },
+  });
+  home.addText('Video B', {
+    x: 4, y: 2.6, w: 2.7, h: 1.6,
+    shape: pptx.ShapeType.roundRect, rectRadius: 0.12,
+    fill: { color: '2E5D8A' }, fontFace: FONT, fontSize: 18, bold: true, color: WHITE,
+    align: 'center', valign: 'middle',
+    objectName: 'BTN_VideoB',
+    hyperlink: { slide: 3 },
+  });
+
+  function destWithHome(title) {
+    const s = pptx.addSlide();
+    s.background = { color: LIGHT };
+    s.addText(title, { x: 0.6, y: 0.4, w: 12, h: 0.8, fontFace: FONT, fontSize: 24, bold: true, color: NAVY });
+    s.addText('Home', {
+      x: 0.6, y: 6.5, w: 1.8, h: 0.6,
+      shape: pptx.ShapeType.roundRect, rectRadius: 0.15,
+      fill: { color: NAVY }, fontFace: FONT, fontSize: 14, bold: true, color: WHITE,
+      align: 'center', valign: 'middle',
+      objectName: 'BTN_Home',
+      hyperlink: { slide: 1 },
+    });
+    return s;
+  }
+
+  // Slide 2: autoplay-by-default (no timing XML at all; pptxgenjs never emits <p:timing>).
+  const s2 = destWithHome('Video A (autoplay by default)');
+  s2.addMedia({
+    type: 'video',
+    data: `video/mp4;base64,${tinyMp4Base64}`,
+    x: 1, y: 1.5, w: 4, h: 2.25,
+    objectName: 'Video_Auto',
+  });
+
+  // Slide 3: same embedded clip; timing (loop + clickEffect) is patched in below via JSZip.
+  const s3 = destWithHome('Video B (loop, tap to start)');
+  s3.addMedia({
+    type: 'video',
+    data: `video/mp4;base64,${tinyMp4Base64}`,
+    x: 1, y: 1.5, w: 4, h: 2.25,
+    objectName: 'Video_Loop',
+  });
+
+  // Slide 4: a linked (online/external) video: pptxgenjs's `online` media type emits
+  // TargetMode="External" and no p14:media extension, matching a real "Link to File" video.
+  // Deliberately left unlinked from Home (-> unlinked_slide warning, like good.pptx's info
+  // slide): its only purpose is to be parsed directly and flagged, not to be reachable.
+  const s4 = destWithHome('Linked video (not embedded)');
+  s4.addMedia({
+    type: 'online',
+    link: 'https://example.com/not-embedded.mp4',
+    x: 1, y: 1.5, w: 4, h: 2.25,
+    objectName: 'Video_Linked',
+  });
+
+  return pptx;
+}
+
+/**
+ * Patches a hand-written `<p:timing>` tree into `slideFile`, targeting the shape named
+ * `shapeName`: `repeatCount="indefinite"` on the media behaviour (loop) and a `playFrom` `cmd`
+ * nested under a `clickEffect` par (autoplay false): real-shaped OOXML timing XML, since
+ * pptxgenjs itself never emits any `<p:timing>` at all (see the file header comment).
+ */
+async function injectVideoTiming(pptxPath, slideFile, shapeName) {
+  const data = await fs.readFile(pptxPath);
+  const zip = await JSZip.loadAsync(data);
+  const slidePath = `ppt/slides/${slideFile}`;
+  let xml = await zip.file(slidePath).async('string');
+
+  const idMatch = xml.match(new RegExp(`<p:cNvPr id="(\\d+)" name="${shapeName}"`));
+  if (!idMatch) throw new Error(`injectVideoTiming: could not find shape "${shapeName}" in ${slidePath}`);
+  const shapeId = idMatch[1];
+
+  const timing =
+    '<p:timing>' +
+    '<p:tnLst>' +
+    '<p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>' +
+    '<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>' +
+    '<p:par><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>' +
+    '<p:par><p:cTn id="4" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>' +
+    `<p:par><p:cTn id="5" presetID="1" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+    '<p:cmd type="call" cmd="playFrom(0)"><p:cBhvr>' +
+    `<p:cTn id="6" dur="1000" fill="hold" repeatCount="indefinite"/><p:tgtEl><p:spTgt spid="${shapeId}"/></p:tgtEl>` +
+    '</p:cBhvr></p:cmd>' +
+    '</p:childTnLst></p:cTn></p:par>' +
+    '</p:childTnLst></p:cTn></p:par>' +
+    '</p:childTnLst></p:cTn></p:par>' +
+    '</p:childTnLst></p:cTn></p:seq>' +
+    '</p:childTnLst></p:cTn></p:par>' +
+    '</p:tnLst>' +
+    `<p:bldLst><p:bldMedia spid="${shapeId}"/></p:bldLst>` +
+    '</p:timing>';
+
+  if (!xml.includes('</p:sld>')) throw new Error(`injectVideoTiming: ${slidePath} has no </p:sld> to patch before`);
+  xml = xml.replace('</p:sld>', `${timing}</p:sld>`);
+
+  zip.file(slidePath, xml);
+  const buf = await zip.generateAsync({ type: 'nodebuffer' });
+  await fs.writeFile(pptxPath, buf);
+}
+
 async function main() {
   const good = buildGoodDeck();
   const goodFixturePath = path.join(FIXTURES_DIR, 'good.pptx');
@@ -704,6 +846,14 @@ async function main() {
   const pollsPath = path.join(FIXTURES_DIR, 'polls.pptx');
   await writePptx(polls, pollsPath);
   console.log(`Wrote ${pollsPath}`);
+
+  const tinyMp4Base64 = (await fs.readFile(path.join(ROOT, 'scripts', 'fixture-media', 'tiny.mp4'))).toString('base64');
+  const video = buildVideoDeck(tinyMp4Base64);
+  const videoPath = path.join(FIXTURES_DIR, 'video.pptx');
+  await writePptx(video, videoPath);
+  await injectVideoTiming(videoPath, 'slide3.xml', 'Video_Loop');
+  const videoStat = await fs.stat(videoPath);
+  console.log(`Wrote ${videoPath} (${videoStat.size} bytes)`);
 
   console.log('Done.');
 }
