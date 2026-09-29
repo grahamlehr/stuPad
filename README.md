@@ -6,7 +6,7 @@ Offline iPad PWA that turns a structured PowerPoint deck into a self-running, to
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how it works and a tour of the codebase
 - [docs/PLAN.md](docs/PLAN.md): module contracts and ownership from the original build plan
 - [docs/ROADMAP.md](docs/ROADMAP.md): development plan for upcoming features
-- [docs/brand/](docs/brand/): Emota brand stylesheet and cheat sheet the admin UI follows
+
 
 ## How it works
 
